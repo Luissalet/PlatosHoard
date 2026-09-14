@@ -43,16 +43,8 @@ HTML_TEMPLATE = """
     min-height: 100vh;
     padding: 24px;
   }
-  h1 {
-    font-size: 1.4rem;
-    font-weight: 600;
-    margin-bottom: 4px;
-  }
-  .subtitle {
-    color: var(--muted);
-    font-size: 0.85rem;
-    margin-bottom: 24px;
-  }
+  h1 { font-size: 1.4rem; font-weight: 600; margin-bottom: 4px; }
+  .subtitle { color: var(--muted); font-size: 0.85rem; margin-bottom: 24px; }
 
   /* Upload area */
   .upload-area {
@@ -68,14 +60,8 @@ HTML_TEMPLATE = """
     border-color: var(--accent);
     background: rgba(79, 140, 255, 0.05);
   }
-  .upload-area p {
-    color: var(--muted);
-    font-size: 0.95rem;
-  }
-  .upload-area .icon {
-    font-size: 2.5rem;
-    margin-bottom: 12px;
-  }
+  .upload-area p { color: var(--muted); font-size: 0.95rem; }
+  .upload-area .icon { font-size: 2.5rem; margin-bottom: 12px; }
   #file-input { display: none; }
 
   /* Controls */
@@ -83,27 +69,25 @@ HTML_TEMPLATE = """
     display: flex;
     gap: 16px;
     align-items: center;
-    margin-bottom: 24px;
+    margin-bottom: 16px;
     flex-wrap: wrap;
   }
-  .control-group {
-    display: flex;
-    align-items: center;
-    gap: 8px;
-  }
-  .control-group label {
-    font-size: 0.85rem;
-    color: var(--muted);
-  }
-  .control-group input[type="range"] {
-    width: 120px;
-    accent-color: var(--accent);
-  }
+  .control-group { display: flex; align-items: center; gap: 8px; }
+  .control-group label { font-size: 0.85rem; color: var(--muted); }
+  .control-group input[type="range"] { width: 120px; accent-color: var(--accent); }
   .control-group .value {
     font-size: 0.85rem;
     min-width: 32px;
     text-align: right;
     font-variant-numeric: tabular-nums;
+  }
+  .control-group select {
+    background: var(--panel);
+    color: var(--text);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    padding: 6px 10px;
+    font-size: 0.85rem;
   }
   button {
     background: var(--accent);
@@ -118,6 +102,27 @@ HTML_TEMPLATE = """
   }
   button:hover { opacity: 0.85; }
   button:disabled { opacity: 0.4; cursor: not-allowed; }
+  button.secondary {
+    background: var(--border);
+    color: var(--text);
+    padding: 6px 12px;
+    font-size: 0.8rem;
+  }
+  button.secondary.active { background: var(--accent); color: white; }
+
+  .advanced-toggle {
+    font-size: 0.8rem;
+    color: var(--muted);
+    cursor: pointer;
+    user-select: none;
+    margin-bottom: 16px;
+  }
+  .advanced-toggle:hover { color: var(--text); }
+  .advanced { display: none; margin-bottom: 16px; }
+  .advanced.open { display: flex; gap: 16px; flex-wrap: wrap; align-items: center; }
+
+  /* View buttons */
+  .view-buttons { display: flex; gap: 6px; }
 
   /* Results grid */
   .results {
@@ -156,44 +161,33 @@ HTML_TEMPLATE = """
     align-items: center;
     justify-content: center;
     min-height: 200px;
+    background: #ffffff; /* white preview background (CSS, not part of SVG) */
   }
-  .card-body img {
-    max-width: 100%;
-    max-height: 300px;
-    object-fit: contain;
-  }
-  .card-body svg {
-    max-width: 100%;
-    max-height: 300px;
-  }
-  .card-body canvas {
-    width: 100%;
-    height: 300px;
-    border-radius: 8px;
-  }
-  .card-body .placeholder {
-    color: var(--muted);
-    font-size: 0.85rem;
-  }
+  .card-body img { max-width: 100%; max-height: 300px; object-fit: contain; }
+  .card-body svg { max-width: 100%; max-height: 300px; }
+  .card-body canvas { width: 100%; height: 300px; border-radius: 8px; }
+  .card-body .placeholder { color: var(--muted); font-size: 0.85rem; }
 
   /* 3D card spans full width */
-  .card-3d {
-    grid-column: 1 / -1;
+  .card-3d { grid-column: 1 / -1; }
+  .card-3d .card-body { min-height: 400px; padding: 0; background: var(--panel); }
+  .card-3d canvas { height: 400px; border-radius: 0; }
+
+  /* Metadata bar */
+  .meta-bar {
+    display: flex;
+    gap: 16px;
+    flex-wrap: wrap;
+    padding: 8px 16px;
+    font-size: 0.75rem;
+    color: var(--muted);
+    border-top: 1px solid var(--border);
   }
-  .card-3d .card-body {
-    min-height: 400px;
-    padding: 0;
-  }
-  .card-3d canvas {
-    height: 400px;
-    border-radius: 0;
-  }
+  .meta-bar .ok { color: #4caf50; }
+  .meta-bar .bad { color: #ff6b6b; }
 
   /* Download buttons */
-  .downloads {
-    display: flex;
-    gap: 8px;
-  }
+  .downloads { display: flex; gap: 8px; }
   .downloads a {
     font-size: 0.75rem;
     padding: 4px 10px;
@@ -217,18 +211,13 @@ HTML_TEMPLATE = """
   }
   @keyframes spin { to { transform: rotate(360deg); } }
 
-  .status {
-    text-align: center;
-    padding: 20px;
-    color: var(--muted);
-    font-size: 0.9rem;
-  }
+  .status { text-align: center; padding: 20px; color: var(--muted); font-size: 0.9rem; }
   .status.error { color: #ff6b6b; }
 </style>
 </head>
 <body>
   <h1>Silhouette 3D</h1>
-  <p class="subtitle">PNG &rarr; black silhouette &rarr; SVG &rarr; extruded 3D mesh</p>
+  <p class="subtitle">PNG &rarr; black silhouette &rarr; SVG &rarr; extruded 3D mesh (single source of truth)</p>
 
   <div class="upload-area" id="upload-area">
     <div class="icon">&#128193;</div>
@@ -243,11 +232,33 @@ HTML_TEMPLATE = """
       <span class="value" id="thickness-val">10</span>
     </div>
     <div class="control-group">
-      <label for="simplify">Simplify</label>
-      <input type="range" id="simplify" min="1" max="100" value="10"/>
-      <span class="value" id="simplify-val">10</span>
+      <label for="detail">Detail</label>
+      <input type="range" id="detail" min="0.1" max="3.0" step="0.1" value="0.5"/>
+      <span class="value" id="detail-val">0.5</span>
+    </div>
+    <div class="control-group">
+      <label for="speckle">Speck removal</label>
+      <input type="range" id="speckle" min="0" max="200" step="5" value="10"/>
+      <span class="value" id="speckle-val">10</span>
+    </div>
+    <div class="control-group">
+      <label for="preset">Preset</label>
+      <select id="preset">
+        <option value="exact">Exact</option>
+        <option value="clean" selected>Clean</option>
+        <option value="smooth">Smooth</option>
+      </select>
     </div>
     <button id="process-btn" disabled>Process</button>
+  </div>
+
+  <div class="advanced-toggle" id="adv-toggle">&#9656; Advanced</div>
+  <div class="advanced" id="advanced">
+    <div class="control-group">
+      <label for="alpha-threshold">Alpha threshold</label>
+      <input type="range" id="alpha-threshold" min="1" max="254" value="128"/>
+      <span class="value" id="alpha-threshold-val">128</span>
+    </div>
   </div>
 
   <div class="status" id="status" style="display:none"></div>
@@ -286,11 +297,21 @@ HTML_TEMPLATE = """
     <div class="card card-3d">
       <div class="card-header">
         3D Extrusion
-        <div class="downloads" id="dl-stl"></div>
+        <div style="display:flex;gap:8px;align-items:center">
+          <div class="view-buttons">
+            <button class="secondary" data-view="front">Front</button>
+            <button class="secondary" data-view="iso">Iso</button>
+            <button class="secondary" data-view="side">Side</button>
+            <button class="secondary" data-view="top">Top</button>
+            <button class="secondary" id="overlay-btn" title="Overlay SVG contour on STL front view">Overlay SVG</button>
+          </div>
+          <div class="downloads" id="dl-stl"></div>
+        </div>
       </div>
       <div class="card-body" id="stl-body">
         <span class="placeholder">Waiting for processing</span>
       </div>
+      <div class="meta-bar" id="meta-bar" style="display:none"></div>
     </div>
   </div>
 
@@ -303,34 +324,43 @@ HTML_TEMPLATE = """
     const statusEl = document.getElementById('status');
     const resultsEl = document.getElementById('results');
     const thicknessSlider = document.getElementById('thickness');
-    const simplifySlider = document.getElementById('simplify');
+    const detailSlider = document.getElementById('detail');
+    const speckleSlider = document.getElementById('speckle');
+    const presetSelect = document.getElementById('preset');
+    const alphaSlider = document.getElementById('alpha-threshold');
     const thicknessVal = document.getElementById('thickness-val');
-    const simplifyVal = document.getElementById('simplify-val');
+    const detailVal = document.getElementById('detail-val');
+    const speckleVal = document.getElementById('speckle-val');
+    const alphaVal = document.getElementById('alpha-threshold-val');
+    const advToggle = document.getElementById('adv-toggle');
+    const advancedEl = document.getElementById('advanced');
 
     let currentFile = null;
+    let currentSvgB64 = null;
     let threeScene = null;
     let threeRenderer = null;
     let threeCamera = null;
     let threeMesh = null;
     let threeAnimId = null;
+    let overlayLine = null;
 
     // Slider value display
-    thicknessSlider.addEventListener('input', () => {
-      thicknessVal.textContent = thicknessSlider.value;
-    });
-    simplifySlider.addEventListener('input', () => {
-      simplifyVal.textContent = simplifySlider.value;
+    thicknessSlider.addEventListener('input', () => { thicknessVal.textContent = thicknessSlider.value; });
+    detailSlider.addEventListener('input', () => { detailVal.textContent = detailSlider.value; });
+    speckleSlider.addEventListener('input', () => { speckleVal.textContent = speckleSlider.value; });
+    alphaSlider.addEventListener('input', () => { alphaVal.textContent = alphaSlider.value; });
+
+    // Advanced toggle
+    advToggle.addEventListener('click', () => {
+      advancedEl.classList.toggle('open');
+      advToggle.innerHTML = advancedEl.classList.contains('open')
+        ? '&#9662; Advanced' : '&#9656; Advanced';
     });
 
     // Upload handling
     uploadArea.addEventListener('click', () => fileInput.click());
-    uploadArea.addEventListener('dragover', (e) => {
-      e.preventDefault();
-      uploadArea.classList.add('dragover');
-    });
-    uploadArea.addEventListener('dragleave', () => {
-      uploadArea.classList.remove('dragover');
-    });
+    uploadArea.addEventListener('dragover', (e) => { e.preventDefault(); uploadArea.classList.add('dragover'); });
+    uploadArea.addEventListener('dragleave', () => { uploadArea.classList.remove('dragover'); });
     uploadArea.addEventListener('drop', (e) => {
       e.preventDefault();
       uploadArea.classList.remove('dragover');
@@ -349,12 +379,10 @@ HTML_TEMPLATE = """
       currentFile = file;
       processBtn.disabled = false;
 
-      // Show original preview
       const reader = new FileReader();
       reader.onload = (e) => {
         document.getElementById('original-body').innerHTML =
           `<img src="${e.target.result}" alt="Original"/>`;
-        // Add download link
         const dl = document.getElementById('dl-original');
         dl.innerHTML = `<a href="${e.target.result}" download="${file.name}">Download</a>`;
       };
@@ -365,10 +393,7 @@ HTML_TEMPLATE = """
     }
 
     function showStatus(msg, isError = false) {
-      if (!msg) {
-        statusEl.style.display = 'none';
-        return;
-      }
+      if (!msg) { statusEl.style.display = 'none'; return; }
       statusEl.style.display = 'block';
       statusEl.className = 'status' + (isError ? ' error' : '');
       statusEl.innerHTML = msg;
@@ -385,7 +410,10 @@ HTML_TEMPLATE = """
       const formData = new FormData();
       formData.append('file', currentFile);
       formData.append('thickness', thicknessSlider.value);
-      formData.append('simplify', simplifySlider.value);
+      formData.append('detail', detailSlider.value);
+      formData.append('speckle_area', speckleSlider.value);
+      formData.append('preset', presetSelect.value);
+      formData.append('alpha_threshold', alphaSlider.value);
 
       try {
         const resp = await fetch('/api/process', { method: 'POST', body: formData });
@@ -414,6 +442,7 @@ HTML_TEMPLATE = """
 
       // SVG
       const svgB64 = data.svg;
+      currentSvgB64 = svgB64;
       const svgDataUrl = `data:image/svg+xml;base64,${svgB64}`;
       document.getElementById('svg-body').innerHTML =
         `<img src="${svgDataUrl}" alt="SVG"/>`;
@@ -425,16 +454,26 @@ HTML_TEMPLATE = """
       document.getElementById('dl-stl').innerHTML =
         `<a href="data:application/octet-stream;base64,${stlB64}" download="silhouette.stl">Download STL</a>`;
 
-      // Show metadata
-      const stlBody = document.getElementById('stl-body');
-      stlBody.innerHTML = '';
+      // Metadata bar
+      const meta = data.metadata || {};
+      const metaBar = document.getElementById('meta-bar');
+      metaBar.style.display = 'flex';
+      metaBar.innerHTML = `
+        <span class="${meta.watertight ? 'ok' : 'bad'}">watertight: ${meta.watertight}</span>
+        <span>vertices: ${meta.vertices}</span>
+        <span>triangles: ${meta.triangle_count}</span>
+        <span>components: ${meta.components}</span>
+        <span>holes: ${meta.holes}</span>
+        <span>volume: ${meta.volume ? meta.volume.toFixed(1) : '?'}</span>
+      `;
 
       // Load STL into Three.js
+      const stlBody = document.getElementById('stl-body');
+      stlBody.innerHTML = '';
       loadSTL(stlB64, stlBody);
     }
 
     function loadSTL(b64, container) {
-      // Decode base64 to binary
       const binaryStr = atob(b64);
       const bytes = new Uint8Array(binaryStr.length);
       for (let i = 0; i < binaryStr.length; i++) {
@@ -443,29 +482,23 @@ HTML_TEMPLATE = """
 
       // Clean up previous scene
       if (threeAnimId) cancelAnimationFrame(threeAnimId);
-      if (threeRenderer) {
-        threeRenderer.dispose();
-        threeRenderer = null;
-      }
+      if (threeRenderer) { threeRenderer.dispose(); threeRenderer = null; }
+      if (overlayLine) { threeScene.remove(overlayLine); overlayLine = null; }
 
       const width = container.clientWidth || 600;
       const height = 400;
 
-      // Scene
       threeScene = new THREE.Scene();
       threeScene.background = new THREE.Color(0x1a1d24);
 
-      // Camera
       threeCamera = new THREE.PerspectiveCamera(45, width / height, 0.1, 10000);
       threeCamera.position.set(0, 0, 500);
 
-      // Renderer
       threeRenderer = new THREE.WebGLRenderer({ antialias: true });
       threeRenderer.setSize(width, height);
       threeRenderer.setPixelRatio(window.devicePixelRatio);
       container.appendChild(threeRenderer.domElement);
 
-      // Lights
       const ambientLight = new THREE.AmbientLight(0xffffff, 0.6);
       threeScene.add(ambientLight);
       const dirLight = new THREE.DirectionalLight(0xffffff, 0.8);
@@ -475,11 +508,9 @@ HTML_TEMPLATE = """
       dirLight2.position.set(-1, -0.5, -1);
       threeScene.add(dirLight2);
 
-      // Load STL
       const loader = new THREE.STLLoader();
       const geometry = loader.parse(bytes.buffer);
 
-      // Center and scale
       geometry.center();
       const bbox = new THREE.Box3().setFromBufferAttribute(geometry.attributes.position);
       const size = bbox.getSize(new THREE.Vector3());
@@ -487,7 +518,6 @@ HTML_TEMPLATE = """
       const scale = 300 / maxDim;
       geometry.scale(scale, scale, scale);
 
-      // Material
       const material = new THREE.MeshPhongMaterial({
         color: 0x4f8cff,
         shininess: 80,
@@ -497,15 +527,13 @@ HTML_TEMPLATE = """
       threeMesh = new THREE.Mesh(geometry, material);
       threeScene.add(threeMesh);
 
-      // Orbit controls (simple mouse drag)
+      // Default view: FRONT (rotX = 0, rotY = 0)
+      let rotX = 0, rotY = 0;
       let isDragging = false;
       let prevX = 0, prevY = 0;
-      let rotX = 0.3, rotY = 0.5;
 
       threeRenderer.domElement.addEventListener('mousedown', (e) => {
-        isDragging = true;
-        prevX = e.clientX;
-        prevY = e.clientY;
+        isDragging = true; prevX = e.clientX; prevY = e.clientY;
       });
       threeRenderer.domElement.addEventListener('mousemove', (e) => {
         if (!isDragging) return;
@@ -513,20 +541,66 @@ HTML_TEMPLATE = """
         const dy = e.clientY - prevY;
         rotY += dx * 0.01;
         rotX += dy * 0.01;
-        prevX = e.clientX;
-        prevY = e.clientY;
+        prevX = e.clientX; prevY = e.clientY;
       });
       threeRenderer.domElement.addEventListener('mouseup', () => { isDragging = false; });
       threeRenderer.domElement.addEventListener('mouseleave', () => { isDragging = false; });
 
-      // Zoom
       threeRenderer.domElement.addEventListener('wheel', (e) => {
         e.preventDefault();
         threeCamera.position.z += e.deltaY * 0.5;
         threeCamera.position.z = Math.max(50, Math.min(2000, threeCamera.position.z));
       }, { passive: false });
 
-      // Animation loop (no auto-rotate; only re-renders on interaction)
+      // View presets
+      const views = {
+        front: { x: 0, y: 0 },
+        iso:   { x: Math.PI / 6, y: Math.PI / 4 },
+        side:  { x: 0, y: Math.PI / 2 },
+        top:   { x: Math.PI / 2, y: 0 },
+      };
+      document.querySelectorAll('[data-view]').forEach(btn => {
+        btn.addEventListener('click', () => {
+          const v = views[btn.dataset.view];
+          if (v) { rotX = v.x; rotY = v.y; }
+        });
+      });
+
+      // Overlay SVG contour on front view
+      document.getElementById('overlay-btn').addEventListener('click', () => {
+        if (overlayLine) {
+          threeScene.remove(overlayLine);
+          overlayLine = null;
+          document.getElementById('overlay-btn').classList.remove('active');
+          return;
+        }
+        if (!currentSvgB64) return;
+        const svgText = new TextDecoder().decode(Uint8Array.from(atob(currentSvgB64), c => c.charCodeAt(0)));
+        const pts = extractSvgOutline(svgText);
+        if (!pts || pts.length < 2) return;
+
+        // Project SVG outline (image coords) onto the front face of the mesh.
+        // The mesh is centered and scaled; map image coords to mesh local coords.
+        const svgW = parseFloat((svgText.match(/width="([0-9.]+)"/) || [])[1] || 1);
+        const svgH = parseFloat((svgText.match(/height="([0-9.]+)"/) || [])[1] || 1);
+        const bbox2 = new THREE.Box3().setFromObject(threeMesh);
+        const sz = bbox2.getSize(new THREE.Vector3());
+        const frontZ = bbox2.max.z;
+
+        const positions = [];
+        for (let i = 0; i < pts.length; i++) {
+          const px = (pts[i][0] / svgW - 0.5) * sz.x;
+          const py = -(pts[i][1] / svgH - 0.5) * sz.y; // flip Y (image vs 3D)
+          positions.push(px, py, frontZ + 0.5);
+        }
+        const lineGeo = new THREE.BufferGeometry();
+        lineGeo.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3));
+        const lineMat = new THREE.LineBasicMaterial({ color: 0xff4444, linewidth: 2 });
+        overlayLine = new THREE.Line(lineGeo, lineMat);
+        threeScene.add(overlayLine);
+        document.getElementById('overlay-btn').classList.add('active');
+      });
+
       function animate() {
         threeAnimId = requestAnimationFrame(animate);
         threeMesh.rotation.x = rotX;
@@ -535,13 +609,36 @@ HTML_TEMPLATE = """
       }
       animate();
 
-      // Handle resize
       window.addEventListener('resize', () => {
         const w = container.clientWidth || 600;
         threeCamera.aspect = w / height;
         threeCamera.updateProjectionMatrix();
         threeRenderer.setSize(w, height);
       });
+    }
+
+    // Extract the first outline ring from SVG path data (M/L/C/Z commands).
+    // Returns a flat list of [x, y] points (curves approximated by endpoints
+    // for the overlay; good enough for visual comparison).
+    function extractSvgOutline(svgText) {
+      const m = svgText.match(/d="([^"]+)"/);
+      if (!m) return null;
+      const d = m[1];
+      const pts = [];
+      const re = /([MLCQZ])([^MLCQZ]*)/gi;
+      let match;
+      while ((match = re.exec(d)) !== null) {
+        const cmd = match[1];
+        const nums = (match[2].match(/-?[\d.]+(?:e-?\d+)?/g) || []).map(Number);
+        if (cmd === 'M' || cmd === 'L') {
+          for (let i = 0; i + 1 < nums.length; i += 2) pts.push([nums[i], nums[i + 1]]);
+        } else if (cmd === 'C') {
+          for (let i = 0; i + 5 < nums.length; i += 6) pts.push([nums[i + 4], nums[i + 5]]);
+        } else if (cmd === 'Q') {
+          for (let i = 0; i + 3 < nums.length; i += 4) pts.push([nums[i + 2], nums[i + 3]]);
+        }
+      }
+      return pts;
     }
   </script>
 </body>
@@ -572,10 +669,20 @@ def api_process():
         return jsonify({"error": "Empty file"}), 400
 
     thickness = float(request.form.get("thickness", 10))
-    simplify = float(request.form.get("simplify", 10))
+    detail = float(request.form.get("detail", 0.5))
+    speckle_area = float(request.form.get("speckle_area", 10))
+    preset = request.form.get("preset", "clean")
+    alpha_threshold = int(request.form.get("alpha_threshold", 128))
 
     try:
-        result = process_image(png_bytes, thickness=thickness, simplify=simplify)
+        result = process_image(
+            png_bytes,
+            thickness=thickness,
+            preset=preset,
+            detail=detail,
+            speckle_area=speckle_area,
+            alpha_threshold=alpha_threshold,
+        )
         return jsonify(result)
     except Exception as e:
         return jsonify({"error": str(e)}), 500

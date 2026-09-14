@@ -1,7 +1,9 @@
 flask>=3.0
 pillow>=10.0
 numpy>=1.26
-opencv-python>=4.8
+vtracer==1.0.0a4
 trimesh>=4.0
 shapely>=2.0
+mapbox-earcut>=2.0
+svg.path>=6.3
 networkx>=3.0
