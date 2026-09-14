@@ -19,7 +19,11 @@ def validate_mesh(mesh: trimesh.Trimesh) -> Dict:
     """
     # Cleanup
     mesh.remove_unreferenced_vertices()
-    mesh.merge_vertices()
+    # NOTE: merge_vertices() can break watertightness on meshes with
+    # coincident vertices from separate components. Skip it if the mesh
+    # is already watertight.
+    if not mesh.is_watertight:
+        mesh.merge_vertices()
     mesh.fix_normals()
 
     watertight = bool(mesh.is_watertight)
