@@ -1,0 +1,5 @@
+*.png
+.faustus_edit_history
+__pycache__
+.odysseus
+.venv

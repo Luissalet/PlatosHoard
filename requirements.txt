@@ -1,0 +1,7 @@
+flask>=3.0
+pillow>=10.0
+numpy>=1.26
+opencv-python>=4.8
+trimesh>=4.0
+shapely>=2.0
+networkx>=3.0
