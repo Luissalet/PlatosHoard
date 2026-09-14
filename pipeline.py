@@ -1,147 +1,72 @@
-"""
-Silhouette pipeline: PNG -> black silhouette -> traced SVG -> extruded 3D mesh (STL).
-
-Public API:
-    process_image(png_bytes, thickness=10.0, preset="clean",
-                  detail=0.5, speckle_area=10, alpha_threshold=128) -> dict
-
-The returned dict contains base64-encoded artifacts for each stage so the web
-UI can display them without extra round-trips:
-    {
-        "silhouette_png": "<base64>",   # fully black silhouette (RGBA)
-        "svg":            "<base64>",   # vector trace of the silhouette
-        "stl":            "<base64>",   # extruded 3D mesh
-        "width":  int,                  # original image width (px)
-        "height": int,                  # original image height (px)
-        "outline_count": int,           # number of polygons (islands)
-        "triangle_count": int,          # triangles in the STL mesh
-        "metadata": {                   # mesh validation metadata
-            "watertight": bool,
-            "vertices": int,
-            "triangle_count": int,
-            "components": int,
-            "holes": int,
-        }
-    }
-
-Pipeline (single source of truth):
-    PNG
-     -> prepare_mask (binary alpha mask)
-     -> trace_mask (VTracer -> SVG)
-     -> parse_vector + vector_to_polygons (SVG -> Shapely polygons)
-     -> extrude_polygons (trimesh + earcut)
-     -> validate_mesh
-"""
-
-import io
+"""PNG -> foreground mask -> SVG -> filled polygons -> validated STL."""
 import base64
-
-import numpy as np
+import io
+import math
+from dataclasses import replace
 from PIL import Image
-
-from silhouettes.mask import prepare_mask, mask_to_silhouette
-from silhouettes.trace import trace_mask, PRESETS, TraceSettings
+from shapely.affinity import scale
+from silhouettes.mask import prepare_mask, mask_to_silhouette, remove_small_components
+from silhouettes.trace import trace_mask, PRESETS
 from silhouettes.vector import parse_vector, vector_to_polygons
 from silhouettes.mesh import extrude_polygons
 from silhouettes.validation import validate_mesh
 
+# Fixed export tolerance for curve-to-polyline flattening (pixels of source).
+MESH_FLATTEN_TOLERANCE_PX = 0.025
 
-def _settings_from_params(preset: str, detail: float, speckle_area: float) -> TraceSettings:
-    """Build TraceSettings from UI parameters.
 
-    Args:
-        preset: one of 'exact', 'clean', 'smooth'.
-        detail: trace tolerance in px (0.1 - 3.0). Lower = more faithful.
-                Mapped to VTracer simplify (0..1) and path_precision.
-        speckle_area: minimum region area in px^2 to keep.
-    """
-    base = PRESETS.get(preset, PRESETS["clean"])
-    settings = TraceSettings(
-        mode=base.mode,
-        simplify=base.simplify,
-        path_precision=base.path_precision,
-        color_precision=base.color_precision,
-        layer_difference=base.layer_difference,
-        corner_threshold=base.corner_threshold,
-        length_threshold=base.length_threshold,
-        max_iterations=base.max_iterations,
-        splice_threshold=base.splice_threshold,
-    )
-
-    # Detail slider (0.1-3.0 px) modulates VTracer simplify:
-    # detail 0.1 -> simplify ~0.05 (very faithful)
-    # detail 3.0 -> simplify ~0.9 (very simplified)
+def _settings_from_params(preset, detail, speckle_area):
+    if preset not in PRESETS:
+        raise ValueError(f"Unknown preset: {preset}")
+    settings = replace(PRESETS[preset])
     if detail is not None:
-        settings.simplify = min(0.95, max(0.02, detail / 3.0))
-
-    # Speckle removal: VTracer filter_speckle is in px (area-ish).
-    # We pass it through the length_threshold as a proxy for small feature removal.
-    if speckle_area is not None and speckle_area > 0:
-        settings.length_threshold = max(1.0, float(speckle_area) ** 0.5)
-
+        if not math.isfinite(detail) or not 0.0 <= detail <= 3.0:
+            raise ValueError("Detail must be a tolerance in 0..3 pixels")
+        settings.simplify = float(detail)
+    # min_area is applied to MASK COMPONENTS, never to length_threshold.
+    settings.filter_speckle = 0
     return settings
 
 
-def process_image(
-    png_bytes: bytes,
-    thickness: float = 10.0,
-    preset: str = "clean",
-    detail: float = 0.5,
-    speckle_area: float = 10.0,
-    alpha_threshold: int = 128,
-) -> dict:
-    """Run the full pipeline: PNG -> silhouette -> SVG -> polygons -> STL.
-
-    Args:
-        png_bytes:       Raw PNG file bytes.
-        thickness:       Extrusion depth in pixels (same units as image coords).
-        preset:          'exact' | 'clean' | 'smooth'
-        detail:          Trace tolerance in px (0.1 - 3.0, default 0.5).
-        speckle_area:    Minimum region area in px^2 to keep (default 10).
-        alpha_threshold: Alpha threshold for mask (default 128).
-
-    Returns:
-        dict with base64-encoded artifacts and metadata (see module docstring).
-
-    Raises:
-        ValueError: on any stage failure (explicit, no silent fallback).
-    """
-    # Load image
-    img = Image.open(io.BytesIO(png_bytes))
-    width, height = img.size
-
-    # Stage 1: binary mask + black silhouette
-    mask = prepare_mask(img, alpha_threshold=alpha_threshold)
-    silhouette = mask_to_silhouette(mask)
-    sil_buf = io.BytesIO()
-    silhouette.save(sil_buf, format="PNG")
-    silhouette_b64 = base64.b64encode(sil_buf.getvalue()).decode("ascii")
-
-    # Stage 2: SVG trace (VTracer)
+def process_image(png_bytes, thickness=10.0, preset="clean", detail=None,
+                  speckle_area=10.0, alpha_threshold=128):
+    if not math.isfinite(thickness) or thickness <= 0:
+        raise ValueError("Thickness must be positive and finite")
     settings = _settings_from_params(preset, detail, speckle_area)
-    svg_str = trace_mask(mask, settings)
-    svg_b64 = base64.b64encode(svg_str.encode("utf-8")).decode("ascii")
-
-    # Stage 3: SVG -> polygons (single source of truth for the STL)
-    rings = parse_vector(svg_str)
-    polygons = vector_to_polygons(rings)
-
-    # Stage 4: extrude
-    mesh = extrude_polygons(polygons, thickness=thickness)
-
-    # Stage 5: validate
-    metadata = validate_mesh(mesh)
-
-    stl_bytes = mesh.export(file_type="stl")
-    stl_b64 = base64.b64encode(stl_bytes).decode("ascii")
-
+    with Image.open(io.BytesIO(png_bytes)) as image:
+        if image.format != "PNG":
+            raise ValueError("Only PNG input is supported")
+        image.load()
+        width, height = image.size
+        mask = prepare_mask(image, alpha_threshold)
+    mask = remove_small_components(mask, speckle_area)
+    silhouette_buffer = io.BytesIO()
+    mask_to_silhouette(mask).save(silhouette_buffer, format="PNG")
+    svg = trace_mask(mask, settings)
+    vector = parse_vector(svg, tolerance=MESH_FLATTEN_TOLERANCE_PX)
+    image_polygons = vector_to_polygons(vector)
+    # Image/SVG +Y points down; STL/world +Y points up. Transform ONCE.
+    model_polygons = [scale(p, xfact=1, yfact=-1, origin=(0, 0)) for p in image_polygons]
+    mesh = extrude_polygons(model_polygons, thickness)
+    metadata = validate_mesh(mesh, model_polygons, thickness)
+    metadata["mesh_to_svg"] = [1, 0, 0, -1, 0, 0]
+    metadata["flatten_tolerance_px"] = vector.tolerance
+    metadata["trace_tolerance_px"] = settings.simplify
+    metadata["corner_threshold_deg"] = settings.corner_threshold
+    metadata["splice_threshold_deg"] = settings.splice_threshold
+    metadata["length_threshold_px"] = settings.length_threshold
+    metadata["path_precision"] = settings.path_precision
+    outlines = [list(map(list, ring.coords)) for p in model_polygons
+                for ring in [p.exterior, *p.interiors]]
+    b64 = lambda data: base64.b64encode(data).decode("ascii")
     return {
-        "silhouette_png": silhouette_b64,
-        "svg": svg_b64,
-        "stl": stl_b64,
-        "width": width,
-        "height": height,
-        "outline_count": len(polygons),
+        "silhouette_png": b64(silhouette_buffer.getvalue()),
+        "svg": b64(svg.encode("utf-8")),
+        "stl": b64(mesh.export(file_type="stl")),
+        "width": width, "height": height,
+        "outline_count": len(image_polygons),
         "triangle_count": metadata["triangle_count"],
         "metadata": metadata,
+        # UI overlay must use these rings, never another regex SVG parser.
+        "outline_rings": outlines,
     }

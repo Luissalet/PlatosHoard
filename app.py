@@ -155,6 +155,23 @@ HTML_TEMPLATE = """
     border-radius: 10px;
     font-size: 0.7rem;
   }
+  #stl-body {
+    position: relative;
+    display: block;
+    padding: 0;
+    height: 420px;
+    min-height: 420px;
+    overflow: hidden;
+  }
+  #stl-body canvas {
+    position: absolute;
+    inset: 0;
+    display: block;
+    width: 100%;
+    height: 100%;
+    touch-action: none;
+    image-rendering: auto;
+  }
   .card-body {
     padding: 16px;
     display: flex;
@@ -233,7 +250,7 @@ HTML_TEMPLATE = """
     </div>
     <div class="control-group">
       <label for="detail">Detail</label>
-      <input type="range" id="detail" min="0.1" max="3.0" step="0.1" value="0.5"/>
+      <input type="range" id="detail" min="0.1" max="3" step="0.05" value="0.8"/>
       <span class="value" id="detail-val">0.5</span>
     </div>
     <div class="control-group">
@@ -303,6 +320,8 @@ HTML_TEMPLATE = """
             <button class="secondary" data-view="iso">Iso</button>
             <button class="secondary" data-view="side">Side</button>
             <button class="secondary" data-view="top">Top</button>
+            <button class="secondary" data-view="fit">Encuadrar</button>
+            <button class="secondary" id="preview-hq">HQ</button>
             <button class="secondary" id="overlay-btn" title="Overlay SVG contour on STL front view">Overlay SVG</button>
           </div>
           <div class="downloads" id="dl-stl"></div>
@@ -349,6 +368,14 @@ HTML_TEMPLATE = """
     detailSlider.addEventListener('input', () => { detailVal.textContent = detailSlider.value; });
     speckleSlider.addEventListener('input', () => { speckleVal.textContent = speckleSlider.value; });
     alphaSlider.addEventListener('input', () => { alphaVal.textContent = alphaSlider.value; });
+
+    const detailByPreset = { exact: 0.1, clean: 0.8, smooth: 1.25 };
+    function applyTracePreset() {
+      detailSlider.value = String(detailByPreset[presetSelect.value]);
+      detailVal.textContent = detailSlider.value;
+    }
+    presetSelect.addEventListener('change', applyTracePreset);
+    applyTracePreset();
 
     // Advanced toggle
     advToggle.addEventListener('click', () => {
@@ -470,176 +497,195 @@ HTML_TEMPLATE = """
       // Load STL into Three.js
       const stlBody = document.getElementById('stl-body');
       stlBody.innerHTML = '';
-      loadSTL(stlB64, stlBody);
+      loadSTL(stlB64, stlBody, data.outline_rings || []);
     }
 
-    function loadSTL(b64, container) {
-      const binaryStr = atob(b64);
-      const bytes = new Uint8Array(binaryStr.length);
-      for (let i = 0; i < binaryStr.length; i++) {
-        bytes[i] = binaryStr.charCodeAt(i);
+    // Full replacement for the previous loadSTL, NOT an additional renderer.
+    // Requires Three.js + STLLoader already loaded by app.py (r128 is sufficient).
+    // Call: loadSTL(stlB64, stlBody, data.outline_rings || []);
+    // Add the CSS and optional Fit/HQ buttons documented in the Markdown.
+    function loadSTL(b64, container, outlineRings = []) {
+      if (loadSTL.dispose) loadSTL.dispose();
+      const bytes = Uint8Array.from(atob(b64), c => c.charCodeAt(0));
+      const geometry = new THREE.STLLoader().parse(bytes.buffer);
+      geometry.computeBoundingBox();
+      const center = geometry.boundingBox.getCenter(new THREE.Vector3());
+      const size = geometry.boundingBox.getSize(new THREE.Vector3());
+      const topZ = geometry.boundingBox.max.z;
+      const span = Math.max(size.x, size.y, size.z);
+      if (!(span > 0) || !Number.isFinite(span)) throw new Error('Invalid STL bounds');
+      // Display-only centering. Never rewrite or rescale the downloadable STL.
+      geometry.translate(-center.x, -center.y, -center.z);
+
+      const scene = new THREE.Scene();
+      scene.background = new THREE.Color(0x1a1d24);
+      const radius = size.length() / 2;
+      const distance = radius * 4 + 1;
+      const camera = new THREE.OrthographicCamera(-1, 1, 1, -1, 0.01, distance + radius * 4 + 1);
+      camera.position.set(0, 0, distance);
+      camera.lookAt(0, 0, 0);
+      const renderer = new THREE.WebGLRenderer({ antialias: true, alpha: false });
+      // Exactly ONE resolution multiplier: buffer dimensions below. No double DPR.
+      renderer.setPixelRatio(1);
+      const canvas = renderer.domElement;
+      container.replaceChildren(canvas);
+      const material = new THREE.MeshPhongMaterial({ color: 0x4f8cff, shininess: 80 });
+      const mesh = new THREE.Mesh(geometry, material);
+      const pivot = new THREE.Group();
+      pivot.add(mesh);
+      scene.add(pivot);
+      scene.add(new THREE.AmbientLight(0xffffff, 0.7));
+      const light = new THREE.DirectionalLight(0xffffff, 0.8);
+      light.position.set(1, 1, 2);
+      scene.add(light);
+
+      const overlay = new THREE.Group();
+      for (const ring of outlineRings) {
+        if (ring.length < 3) continue;
+        const last = ring[ring.length - 1], first = ring[0];
+        const closed = last[0] === first[0] && last[1] === first[1];
+        const source = closed ? ring.slice(0, -1) : ring;
+        const points = source.map(([x, y]) => new THREE.Vector3(
+          x - center.x, y - center.y, topZ - center.z + span * 0.00001
+        ));
+        overlay.add(new THREE.LineLoop(
+          new THREE.BufferGeometry().setFromPoints(points),
+          new THREE.LineBasicMaterial({ color: 0xff4444 })
+        ));
       }
+      overlay.visible = false;
+      pivot.add(overlay);
 
-      // Clean up previous scene
-      if (threeAnimId) cancelAnimationFrame(threeAnimId);
-      if (threeRenderer) { threeRenderer.dispose(); threeRenderer = null; }
-      if (overlayLine) { threeScene.remove(overlayLine); overlayLine = null; }
-
-      const width = container.clientWidth || 600;
-      const height = 400;
-
-      threeScene = new THREE.Scene();
-      threeScene.background = new THREE.Color(0x1a1d24);
-
-      threeCamera = new THREE.PerspectiveCamera(45, width / height, 0.1, 10000);
-      threeCamera.position.set(0, 0, 500);
-
-      threeRenderer = new THREE.WebGLRenderer({ antialias: true });
-      threeRenderer.setSize(width, height);
-      threeRenderer.setPixelRatio(window.devicePixelRatio);
-      container.appendChild(threeRenderer.domElement);
-
-      const ambientLight = new THREE.AmbientLight(0xffffff, 0.6);
-      threeScene.add(ambientLight);
-      const dirLight = new THREE.DirectionalLight(0xffffff, 0.8);
-      dirLight.position.set(1, 1, 1);
-      threeScene.add(dirLight);
-      const dirLight2 = new THREE.DirectionalLight(0xffffff, 0.4);
-      dirLight2.position.set(-1, -0.5, -1);
-      threeScene.add(dirLight2);
-
-      const loader = new THREE.STLLoader();
-      const geometry = loader.parse(bytes.buffer);
-
-      geometry.center();
-      const bbox = new THREE.Box3().setFromBufferAttribute(geometry.attributes.position);
-      const size = bbox.getSize(new THREE.Vector3());
-      const maxDim = Math.max(size.x, size.y, size.z);
-      const scale = 300 / maxDim;
-      geometry.scale(scale, scale, scale);
-
-      const material = new THREE.MeshPhongMaterial({
-        color: 0x4f8cff,
-        shininess: 80,
-        side: THREE.DoubleSide,
-      });
-
-      threeMesh = new THREE.Mesh(geometry, material);
-      threeScene.add(threeMesh);
-
-      // Default view: FRONT (rotX = 0, rotY = 0)
-      let rotX = 0, rotY = 0;
-      let isDragging = false;
-      let prevX = 0, prevY = 0;
-
-      threeRenderer.domElement.addEventListener('mousedown', (e) => {
-        isDragging = true; prevX = e.clientX; prevY = e.clientY;
-      });
-      threeRenderer.domElement.addEventListener('mousemove', (e) => {
-        if (!isDragging) return;
-        const dx = e.clientX - prevX;
-        const dy = e.clientY - prevY;
-        rotY += dx * 0.01;
-        rotX += dy * 0.01;
-        prevX = e.clientX; prevY = e.clientY;
-      });
-      threeRenderer.domElement.addEventListener('mouseup', () => { isDragging = false; });
-      threeRenderer.domElement.addEventListener('mouseleave', () => { isDragging = false; });
-
-      threeRenderer.domElement.addEventListener('wheel', (e) => {
-        e.preventDefault();
-        threeCamera.position.z += e.deltaY * 0.5;
-        threeCamera.position.z = Math.max(50, Math.min(2000, threeCamera.position.z));
-      }, { passive: false });
-
-      // View presets
-      const views = {
-        front: { x: 0, y: 0 },
-        iso:   { x: Math.PI / 6, y: Math.PI / 4 },
-        side:  { x: 0, y: Math.PI / 2 },
-        top:   { x: Math.PI / 2, y: 0 },
+      let supersample = 1;
+      let disposed = false;
+      let raf = 0;
+      const removers = [];
+      const on = (target, type, handler, options) => {
+        if (!target) return;
+        target.addEventListener(type, handler, options);
+        removers.push(() => target.removeEventListener(type, handler, options));
       };
-      document.querySelectorAll('[data-view]').forEach(btn => {
-        btn.addEventListener('click', () => {
-          const v = views[btn.dataset.view];
-          if (v) { rotX = v.x; rotY = v.y; }
+      const gl = renderer.getContext();
+      const maxDimension = gl.getParameter(gl.MAX_RENDERBUFFER_SIZE);
+      function updateBuffer() {
+        const rect = canvas.getBoundingClientRect();
+        if (!(rect.width > 0 && rect.height > 0)) return false;
+        const dpr = window.devicePixelRatio || 1;
+        let w = Math.ceil(rect.width * dpr * supersample);
+        let h = Math.ceil(rect.height * dpr * supersample);
+        const factor = Math.min(1, Math.sqrt(8_000_000 / (w * h)), maxDimension / w, maxDimension / h);
+        w = Math.max(1, Math.floor(w * factor));
+        h = Math.max(1, Math.floor(h * factor));
+        if (canvas.width !== w || canvas.height !== h) renderer.setSize(w, h, false);
+        return true;
+      }
+      function setFrustum(resetZoom) {
+        const rect = canvas.getBoundingClientRect();
+        if (!(rect.width > 0 && rect.height > 0)) return;
+        pivot.updateMatrixWorld(true);
+        // Use the actual rotated mesh, not screenshot dimensions or source image size.
+        const box = new THREE.Box3().setFromObject(mesh);
+        const aspect = rect.width / rect.height;
+        const xRadius = Math.max(Math.abs(box.min.x), Math.abs(box.max.x));
+        const yRadius = Math.max(Math.abs(box.min.y), Math.abs(box.max.y));
+        const halfHeight = Math.max(yRadius, xRadius / aspect, span * 0.01) * 1.12;
+        camera.left = -halfHeight * aspect; camera.right = halfHeight * aspect;
+        camera.top = halfHeight; camera.bottom = -halfHeight;
+        if (resetZoom) camera.zoom = 1;
+        camera.updateProjectionMatrix();
+      }
+      function render() {
+        if (disposed) return;
+        updateBuffer();
+        renderer.render(scene, camera);
+      }
+      function scheduleRender() {
+        if (disposed || raf) return;
+        raf = requestAnimationFrame(() => { raf = 0; render(); });
+      }
+      function resize() {
+        if (disposed) return;
+        setFrustum(false);
+        scheduleRender();
+      }
+      const observer = new ResizeObserver(resize);
+      observer.observe(container);
+      on(window, 'resize', resize); // Covers most browser zoom / DPR changes too.
+
+      let dragging = false, prevX = 0, prevY = 0;
+      on(canvas, 'pointerdown', e => {
+        dragging = true; prevX = e.clientX; prevY = e.clientY;
+        canvas.setPointerCapture(e.pointerId);
+      });
+      on(canvas, 'pointermove', e => {
+        if (!dragging) return;
+        pivot.rotation.y += (e.clientX - prevX) * 0.01;
+        pivot.rotation.x += (e.clientY - prevY) * 0.01;
+        prevX = e.clientX; prevY = e.clientY;
+        scheduleRender();
+      });
+      on(canvas, 'pointerup', () => { dragging = false; });
+      on(canvas, 'pointercancel', () => { dragging = false; });
+      on(canvas, 'wheel', e => {
+        e.preventDefault();
+        camera.zoom = Math.max(0.1, Math.min(20, camera.zoom * Math.exp(-e.deltaY * 0.001)));
+        camera.updateProjectionMatrix();
+        scheduleRender();
+      }, { passive: false });
+      const views = {
+        front: [0, 0], iso: [Math.PI / 6, Math.PI / 4],
+        side: [0, Math.PI / 2], top: [Math.PI / 2, 0]
+      };
+      for (const button of document.querySelectorAll('[data-view]')) {
+        on(button, 'click', () => {
+          const name = button.dataset.view;
+          if (views[name]) pivot.rotation.set(views[name][0], views[name][1], 0);
+          if (views[name] || name === 'fit') { setFrustum(true); scheduleRender(); }
         });
-      });
-
-      // Overlay SVG contour on front view
-      document.getElementById('overlay-btn').addEventListener('click', () => {
-        if (overlayLine) {
-          threeScene.remove(overlayLine);
-          overlayLine = null;
-          document.getElementById('overlay-btn').classList.remove('active');
-          return;
-        }
-        if (!currentSvgB64) return;
-        const svgText = new TextDecoder().decode(Uint8Array.from(atob(currentSvgB64), c => c.charCodeAt(0)));
-        const pts = extractSvgOutline(svgText);
-        if (!pts || pts.length < 2) return;
-
-        // Project SVG outline (image coords) onto the front face of the mesh.
-        // The mesh is centered and scaled; map image coords to mesh local coords.
-        const svgW = parseFloat((svgText.match(/width="([0-9.]+)"/) || [])[1] || 1);
-        const svgH = parseFloat((svgText.match(/height="([0-9.]+)"/) || [])[1] || 1);
-        const bbox2 = new THREE.Box3().setFromObject(threeMesh);
-        const sz = bbox2.getSize(new THREE.Vector3());
-        const frontZ = bbox2.max.z;
-
-        const positions = [];
-        for (let i = 0; i < pts.length; i++) {
-          const px = (pts[i][0] / svgW - 0.5) * sz.x;
-          const py = -(pts[i][1] / svgH - 0.5) * sz.y; // flip Y (image vs 3D)
-          positions.push(px, py, frontZ + 0.5);
-        }
-        const lineGeo = new THREE.BufferGeometry();
-        lineGeo.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3));
-        const lineMat = new THREE.LineBasicMaterial({ color: 0xff4444, linewidth: 2 });
-        overlayLine = new THREE.Line(lineGeo, lineMat);
-        threeScene.add(overlayLine);
-        document.getElementById('overlay-btn').classList.add('active');
-      });
-
-      function animate() {
-        threeAnimId = requestAnimationFrame(animate);
-        threeMesh.rotation.x = rotX;
-        threeMesh.rotation.y = rotY;
-        threeRenderer.render(threeScene, threeCamera);
       }
-      animate();
-
-      window.addEventListener('resize', () => {
-        const w = container.clientWidth || 600;
-        threeCamera.aspect = w / height;
-        threeCamera.updateProjectionMatrix();
-        threeRenderer.setSize(w, height);
-      });
+      const overlayButton = document.getElementById('overlay-btn');
+      if (overlayButton) {
+        overlayButton.disabled = !outlineRings.length;
+        overlayButton.classList.remove('active');
+        on(overlayButton, 'click', () => {
+          overlay.visible = !overlay.visible;
+          overlayButton.classList.toggle('active', overlay.visible);
+          scheduleRender();
+        });
+      }
+      const hqButton = document.getElementById('preview-hq');
+      if (hqButton) {
+        hqButton.classList.remove('active');
+        on(hqButton, 'click', () => {
+          supersample = supersample === 1 ? 2 : 1;
+          hqButton.classList.toggle('active', supersample === 2);
+          scheduleRender();
+        });
+      }
+      loadSTL.diagnostics = () => {
+        const rect = canvas.getBoundingClientRect();
+        return {
+          cssWidth: rect.width, cssHeight: rect.height,
+          bufferWidth: canvas.width, bufferHeight: canvas.height,
+          devicePixelRatio: window.devicePixelRatio || 1,
+          supersample, actualAntialias: gl.getContextAttributes().antialias,
+          defaultFramebufferSamples: gl.getParameter(gl.SAMPLES),
+          zoom: camera.zoom,
+          note: 'Pixel-budget cap can lower requested supersampling. AA does not alter STL geometry.'
+        };
+      };
+      loadSTL.dispose = () => {
+        disposed = true;
+        if (raf) cancelAnimationFrame(raf);
+        observer.disconnect(); removers.forEach(remove => remove());
+        overlay.children.forEach(line => { line.geometry.dispose(); line.material.dispose(); });
+        geometry.dispose(); material.dispose(); renderer.dispose();
+        loadSTL.diagnostics = null;
+      };
+      setFrustum(true);
+      render();
     }
 
-    // Extract the first outline ring from SVG path data (M/L/C/Z commands).
-    // Returns a flat list of [x, y] points (curves approximated by endpoints
-    // for the overlay; good enough for visual comparison).
-    function extractSvgOutline(svgText) {
-      const m = svgText.match(/d="([^"]+)"/);
-      if (!m) return null;
-      const d = m[1];
-      const pts = [];
-      const re = /([MLCQZ])([^MLCQZ]*)/gi;
-      let match;
-      while ((match = re.exec(d)) !== null) {
-        const cmd = match[1];
-        const nums = (match[2].match(/-?[\d.]+(?:e-?\d+)?/g) || []).map(Number);
-        if (cmd === 'M' || cmd === 'L') {
-          for (let i = 0; i + 1 < nums.length; i += 2) pts.push([nums[i], nums[i + 1]]);
-        } else if (cmd === 'C') {
-          for (let i = 0; i + 5 < nums.length; i += 6) pts.push([nums[i + 4], nums[i + 5]]);
-        } else if (cmd === 'Q') {
-          for (let i = 0; i + 3 < nums.length; i += 4) pts.push([nums[i + 2], nums[i + 3]]);
-        }
-      }
-      return pts;
-    }
   </script>
 </body>
 </html>

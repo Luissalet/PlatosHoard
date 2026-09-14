@@ -1,71 +1,90 @@
-"""Stage 2: binary mask -> SVG via VTracer.
-
-VTracer runs in spline mode. The SVG contains ONLY the shape (no white
-background rect — the preview background is CSS, not part of the SVG).
-"""
-
-import re
+"""Binary foreground mask (255=shape) -> SVG. No rewriting of path data."""
 from dataclasses import dataclass
-from typing import Optional
-
+import xml.etree.ElementTree as ET
 import numpy as np
 
-import vtracer
+SVG_NS = "http://www.w3.org/2000/svg"
+ET.register_namespace("", SVG_NS)
 
 
 @dataclass
 class TraceSettings:
-    """Independent trace parameters (no single 'simplify' value)."""
     mode: str = "spline"
-    simplify: float = 0.4          # VTracer corner simplification 0..1
-    path_precision: int = 3        # VTracer path precision
+    simplify: float = 0.4  # Tolerance in pixels, NOT a normalized 0..1 value.
+    path_precision: int = 4
     color_precision: int = 8
     layer_difference: int = 8
     corner_threshold: int = 90
     length_threshold: float = 4.0
     max_iterations: int = 10
-    splice_threshold: int = 0
-    filter_speckle: int = 1
+    splice_threshold: int = 45
+    filter_speckle: int = 0  # Component area is filtered in the mask stage.
 
 
-# Presets
 PRESETS = {
-    "exact":  TraceSettings(simplify=0.1, path_precision=4, corner_threshold=120),
-    "clean":  TraceSettings(simplify=0.4, path_precision=3, corner_threshold=90),
-    "smooth": TraceSettings(simplify=0.7, path_precision=2, corner_threshold=60),
+    "exact": TraceSettings(
+        simplify=0.1, path_precision=5, corner_threshold=90,
+        length_threshold=4.0, splice_threshold=45,
+    ),
+    "clean": TraceSettings(
+        simplify=0.8, path_precision=5, corner_threshold=90,
+        length_threshold=4.0, splice_threshold=45,
+    ),
+    "smooth": TraceSettings(
+        simplify=1.25, path_precision=5, corner_threshold=100,
+        length_threshold=4.0, splice_threshold=45,
+    ),
 }
 
 
+def mask_to_rgba(mask: np.ndarray, pad: int = 16) -> np.ndarray:
+    mask = np.asarray(mask)
+    if mask.ndim != 2 or not mask.size:
+        raise ValueError("Mask must be a nonempty H x W array")
+    if not np.isin(mask, [0, 255]).all():
+        raise ValueError("Mask convention is 255=foreground, 0=background")
+    if not np.any(mask == 255):
+        raise ValueError("No foreground pixels")
+    if not isinstance(pad, int) or pad < 0:
+        raise ValueError("Padding must be a nonnegative integer")
+    h, w = mask.shape
+    rgba = np.full((h + 2 * pad, w + 2 * pad, 4), 255, dtype=np.uint8)
+    interior = rgba[pad:pad + h, pad:pad + w]
+    interior[mask == 255] = (0, 0, 0, 255)  # The shape is BLACK, not the background.
+    return rgba
+
+
+def _strip_background(svg: str, width: int, height: int, pad: int = 0) -> str:
+    """Compatibility name: set viewport only; DO NOT shift/rewrite any d string.
+
+    Binary VTracer must emit shape paths. An unexpected rect is an error,
+    not something to delete to conceal an inverted mask.
+    """
+    root = ET.fromstring(svg)
+    if root.tag.rsplit("}", 1)[-1] != "svg":
+        raise ValueError("VTracer did not return an SVG document")
+    if any(e.tag.rsplit("}", 1)[-1] == "rect" for e in root.iter()):
+        raise ValueError("Unexpected rectangle in binary tracer output")
+    root.set("width", str(width))
+    root.set("height", str(height))
+    root.set("viewBox", f"{pad} {pad} {width} {height}")
+    root.set("overflow", "hidden")
+    # d attributes, fill-rule and transforms are preserved exactly as data.
+    return ET.tostring(root, encoding="unicode") + "\n"
+
+
 class VTracerBackend:
-    """Vectorize a binary mask into an SVG string using VTracer."""
-
-    def trace(self, mask: np.ndarray, settings: Optional[TraceSettings] = None) -> str:
-        """Trace a (H, W) binary mask (0/255) into an SVG string.
-
-        The mask is rendered as a black-on-transparent RGBA array and traced
-        in-memory with VTracer (no temp files). The resulting SVG contains
-        only the shape paths (no background rect).
-        """
+    def trace(self, mask: np.ndarray, settings: TraceSettings | None = None) -> str:
+        # Lazy import permits diagnostics of preparation without the native wheel.
+        import vtracer
         settings = settings or PRESETS["clean"]
-        h, w = mask.shape
-
-        # RGBA: black pixels on WHITE background, alpha=255 everywhere.
-        # VTracer's binary clustering ignores alpha and thresholds on color,
-        # so the shape must be encoded as black-on-white.
-        #
-        # IMPORTANT: pad the canvas with a white border. VTracer traces the
-        # image border as a contour, so a shape touching the edge would
-        # produce a full-canvas ring as an extra "hole". The pad keeps the
-        # shape away from the border; we crop the viewBox back afterwards.
-        # The pad must be large enough that spline overshoot (control points
-        # can extend beyond the shape) never reaches the padded border.
+        if not np.isfinite(settings.simplify) or settings.simplify < 0:
+            raise ValueError("Trace tolerance must be finite and nonnegative")
         pad = 16
-        ph, pw = h + 2 * pad, w + 2 * pad
-        rgba = np.full((ph, pw, 4), 255, dtype=np.uint8)
-        rgba[pad:pad + h, pad:pad + w][mask == 0] = (0, 0, 0, 255)
-
+        rgba = mask_to_rgba(mask, pad)
+        ph, pw = rgba.shape[:2]
         config = vtracer.Config(
-            clustering="binary",
+            clustering="bw",
             mode=settings.mode,
             filter_speckle=settings.filter_speckle,
             color_precision=settings.color_precision,
@@ -76,69 +95,14 @@ class VTracerBackend:
             splice_threshold=settings.splice_threshold,
             simplify=settings.simplify,
             path_precision=settings.path_precision,
+            optimize=0,
         )
-
-        svg = vtracer.convert_pixels(rgba.flatten(), pw, ph, config)
+        svg = config.convert_pixels(rgba.tobytes(order="C"), pw, ph)
         if isinstance(svg, bytes):
             svg = svg.decode("utf-8")
-
+        h, w = mask.shape
         return _strip_background(svg, w, h, pad)
 
 
-def _strip_background(svg: str, width: int, height: int, pad: int = 0) -> str:
-    """Remove background rect, crop the pad offset, normalize the SVG.
-
-    The traced SVG lives in a padded canvas (pad px of white border around
-    the original image). We shift all path coordinates by -pad and set the
-    viewBox back to the original image size.
-    """
-    # Drop any <rect .../> elements (background).
-    svg = re.sub(r"<rect[^>]*/>", "", svg)
-    svg = re.sub(r"<rect[^>]*>.*?</rect>", "", svg, flags=re.DOTALL)
-
-    if pad:
-        svg = _shift_path_data(svg, -pad, -pad)
-
-    # Normalize viewBox / width / height to the original image size.
-    svg = re.sub(r'viewBox="[^"]*"', f'viewBox="0 0 {width} {height}"', svg)
-    svg = re.sub(r'(?<![\w-])width="[^"]*"', f'width="{width}"', svg, count=1)
-    svg = re.sub(r'(?<![\w-])height="[^"]*"', f'height="{height}"', svg, count=1)
-
-    # Ensure fill-rule evenodd so holes work when rendered.
-    if "fill-rule" not in svg:
-        svg = svg.replace("<path", '<path fill-rule="evenodd"', 1)
-
-    return svg.strip() + "\n"
-
-
-def _shift_path_data(svg: str, dx: float, dy: float) -> str:
-    """Shift all coordinates in every path 'd' attribute by (dx, dy)."""
-    def shift_d(m):
-        d = m.group(1)
-        # Tokenize: commands and numbers
-        tokens = re.findall(r"[MLCQZmlcqz]|-?\d*\.?\d+(?:e-?\d+)?", d)
-        out = []
-        i = 0
-        while i < len(tokens):
-            tok = tokens[i]
-            if re.match(r"[MLCQZmlcqz]", tok):
-                out.append(tok)
-                i += 1
-                # Consume coordinate pairs following this command
-                while i < len(tokens) and not re.match(r"[MLCQZmlcqz]", tokens[i]):
-                    x = float(tokens[i]) + dx
-                    y = float(tokens[i + 1]) + dy
-                    out.append(f"{x:g} {y:g}")
-                    i += 2
-            else:
-                # Implicit repeated coordinates (shouldn't happen at start)
-                out.append(tok)
-                i += 1
-        return f'd="{" ".join(out)}"'
-
-    return re.sub(r'd="([^"]+)"', shift_d, svg)
-
-
-def trace_mask(mask: np.ndarray, settings: Optional[TraceSettings] = None) -> str:
-    """Convenience wrapper: binary mask -> SVG string."""
+def trace_mask(mask: np.ndarray, settings: TraceSettings | None = None) -> str:
     return VTracerBackend().trace(mask, settings)
