@@ -268,18 +268,44 @@ export class Viewport2D {
 
     const asset = store.assetById(node.asset_id);
     if (!asset) return;
-    // local_bounds are in local mm (centred); the rendered paths live in
-    // source units under L·N.  Use the full world matrix so the outline
-    // matches the rendered geometry exactly.
-    const m = this._worldMatrix(store.selectedId, asset);
 
+    // local_bounds are already in local mm (after N). Use pose chain ONLY —
+    // multiplying by pathToLocalMatrix again put the blue box in empty space.
+    const m = this._layerMatrix(store.selectedId);
     const lb = asset.local_bounds || [0, 0, 100, 100];
-    const corners = [
+    let corners = [
       affine.point(m, { x: lb[0], y: lb[1] }),
       affine.point(m, { x: lb[2], y: lb[1] }),
       affine.point(m, { x: lb[2], y: lb[3] }),
       affine.point(m, { x: lb[0], y: lb[3] }),
     ];
+
+    // Prefer the live rendered path bbox when available (exact visual match).
+    const el = this._layerEls.get(store.selectedId);
+    if (el) {
+      try {
+        const bb = el.getBBox();
+        if (bb.width > 0 && bb.height > 0) {
+          const ctm = el.getCTM();
+          const root = this.svg.getScreenCTM();
+          if (ctm && root) {
+            const inv = root.inverse();
+            const toDoc = (x, y) => {
+              const s = new DOMPoint(x, y).matrixTransform(ctm);
+              const d = s.matrixTransform(inv);
+              return { x: d.x, y: d.y };
+            };
+            corners = [
+              toDoc(bb.x, bb.y),
+              toDoc(bb.x + bb.width, bb.y),
+              toDoc(bb.x + bb.width, bb.y + bb.height),
+              toDoc(bb.x, bb.y + bb.height),
+            ];
+          }
+        }
+      } catch { /* keep local_bounds corners */ }
+    }
+
     const pts = corners.map(c => `${c.x},${c.y}`).join(' ');
     const poly = document.createElementNS(SVG_NS, 'polygon');
     poly.setAttribute('points', pts);
@@ -290,7 +316,6 @@ export class Viewport2D {
     poly.setAttribute('pointer-events', 'none');
     this.handles.appendChild(poly);
 
-    // Scale handle at bottom-right corner
     const br = corners[2];
     const handle = document.createElementNS(SVG_NS, 'rect');
     handle.setAttribute('x', br.x - 4);
@@ -345,9 +370,8 @@ export class Viewport2D {
   pointInLayer(layerId, asset, docPoint) {
     const lb = asset.local_bounds;
     if (!lb) return false;
-    // Invert the FULL world matrix (L·N) so the test frame matches the
-    // rendered geometry; local_bounds are then in the same local mm space.
-    const m = this._worldMatrix(layerId, asset);
+    // local_bounds are already mm — invert pose chain only (not N again).
+    const m = this._layerMatrix(layerId);
     const local = affine.point(affine.inverse(m), docPoint);
     return local.x >= lb[0] && local.x <= lb[2] &&
            local.y >= lb[1] && local.y <= lb[3];

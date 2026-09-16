@@ -466,8 +466,15 @@ function bindViewToggles() {
           if ($('view-inverse')) $('view-inverse').checked = false;
           if ($('view-inverse-side')) $('view-inverse-side').checked = false;
           applyViewMode();
-          await applyMatrioskaFitAll();
-          refreshAll();
+          const layers = Object.values(store.doc?.layers || {});
+          const hasNesting = layers.some((l) => l.parent_id);
+          if (!hasNesting && store.roots().length >= 2) {
+            // Checking Matrioska with flat roots → nest largest→smallest + fit.
+            await stackMatrioska();
+          } else {
+            await applyMatrioskaFitAll();
+            refreshAll();
+          }
           return;
         }
       }

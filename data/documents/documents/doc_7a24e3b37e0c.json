@@ -4,7 +4,7 @@
     "schema_version": 2,
     "id": "doc_7a24e3b37e0c",
     "name": "Nuevo documento",
-    "revision": 10,
+    "revision": 13,
     "units": "mm",
     "canvas": {
       "width_mm": 200.0,
@@ -97,8 +97,8 @@
         "order": 0,
         "stack_rank": 0,
         "pose": {
-          "tx": -0.3528076734208554,
-          "ty": 4.263256414560601e-14,
+          "tx": 0.3528076734208412,
+          "ty": 1.4210854715202004e-14,
           "scale": 1.328971436859806,
           "angle_deg": 0
         },
@@ -197,6 +197,21 @@
       "type": "set_pose",
       "status": "committed",
       "revision": 10
+    },
+    "cmd_1789571034149_1": {
+      "type": "set_pose",
+      "status": "committed",
+      "revision": 11
+    },
+    "cmd_1789571035508_2": {
+      "type": "set_pose",
+      "status": "committed",
+      "revision": 12
+    },
+    "cmd_1789571036244_3": {
+      "type": "set_pose",
+      "status": "committed",
+      "revision": 13
     }
   }
 }
