@@ -43,11 +43,18 @@ export class EditorStore {
 
   async commitCommand(type, payload, commandId = null) {
     this._commandSeq += 1;
+    const body = { ...(payload || {}) };
+    // Only apply_fit_result reads base_revision from the payload body.
+    // Do NOT inject it into other commands — set_layer_properties treats
+    // unknown keys as unauthorized fields (broke the eye / visibility toggle).
+    if (type === 'apply_fit_result' && body.base_revision === undefined) {
+      body.base_revision = this.revision;
+    }
     const envelope = {
       command_id: commandId || `cmd_${Date.now()}_${this._commandSeq}`,
       base_revision: this.revision,
       type,
-      payload,
+      payload: body,
     };
     const res = await fetch(`${this.baseUrl}/documents/${encodeURIComponent(this.doc.id)}/commands`, {
       method: 'POST',

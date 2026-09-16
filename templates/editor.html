@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1"/>
   <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate"/>
   <title>Silhouettes — Editor de capas</title>
-  <link rel="stylesheet" href="/static/editor/editor.css?v=20260316k"/>
+  <link rel="stylesheet" href="/static/editor/editor.css?v=20260316v"/>
 </head>
 <body class="editor-shell">
   <header id="document-toolbar" class="editor-toolbar" role="toolbar" aria-label="Documento">
@@ -69,6 +69,12 @@
         <div class="button-row">
           <button type="button" id="matrioska-stack" disabled title="Anida raíces de mayor a menor y encaja">Apilar matrioska</button>
         </div>
+        <label class="checkbox-row" title="Deja un margen entre el contorno del hijo y el del padre">
+          <input id="matrioska-padding-enabled" type="checkbox" disabled/>
+          Padding hijo↔padre
+          <input id="matrioska-padding-mm" type="number" min="0" step="0.5" value="2" disabled title="mm de holgura"/>
+          <span class="unit">mm</span>
+        </label>
         <div id="layer-tree" class="layer-tree" aria-live="polite">
           <p class="empty-state">Sin capas. Importa PNG/SVG.</p>
         </div>
@@ -128,6 +134,6 @@
 
   <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/build/three.min.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/controls/OrbitControls.js"></script>
-  <script type="module" src="/static/editor/editor.js?v=20260316k"></script>
+  <script type="module" src="/static/editor/editor.js?v=20260316v"></script>
 </body>
 </html>

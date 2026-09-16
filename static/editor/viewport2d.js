@@ -83,7 +83,7 @@ export class Viewport2D {
     this.renderSelection();
   }
 
-  /** Plancha del canvas con un hueco por capa (máscara SVG). */
+  /** Plancha del canvas con hueco de la capa y sus descendientes. */
   _renderInverseMode() {
     const c = store.doc.canvas;
     const W = c.width_mm, H = c.height_mm;
@@ -265,61 +265,39 @@ export class Viewport2D {
     if (!store.selectedId) return;
     const node = store.layerById(store.selectedId);
     if (!node) return;
-
-    const asset = store.assetById(node.asset_id);
-    if (!asset) return;
-
-    // local_bounds are already in local mm (after N). Use pose chain ONLY —
-    // multiplying by pathToLocalMatrix again put the blue box in empty space.
-    const m = this._layerMatrix(store.selectedId);
-    const lb = asset.local_bounds || [0, 0, 100, 100];
-    let corners = [
-      affine.point(m, { x: lb[0], y: lb[1] }),
-      affine.point(m, { x: lb[2], y: lb[1] }),
-      affine.point(m, { x: lb[2], y: lb[3] }),
-      affine.point(m, { x: lb[0], y: lb[3] }),
-    ];
-
-    // Prefer the live rendered path bbox when available (exact visual match).
     const el = this._layerEls.get(store.selectedId);
-    if (el) {
-      try {
-        const bb = el.getBBox();
-        if (bb.width > 0 && bb.height > 0) {
-          const ctm = el.getCTM();
-          const root = this.svg.getScreenCTM();
-          if (ctm && root) {
-            const inv = root.inverse();
-            const toDoc = (x, y) => {
-              const s = new DOMPoint(x, y).matrixTransform(ctm);
-              const d = s.matrixTransform(inv);
-              return { x: d.x, y: d.y };
-            };
-            corners = [
-              toDoc(bb.x, bb.y),
-              toDoc(bb.x + bb.width, bb.y),
-              toDoc(bb.x + bb.width, bb.y + bb.height),
-              toDoc(bb.x, bb.y + bb.height),
-            ];
-          }
-        }
-      } catch { /* keep local_bounds corners */ }
-    }
+    if (!el) return;
 
-    const pts = corners.map(c => `${c.x},${c.y}`).join(' ');
-    const poly = document.createElementNS(SVG_NS, 'polygon');
-    poly.setAttribute('points', pts);
+    // Draw the box in the SAME local space + transform as the layer group.
+    // That way it cannot drift from the rendered silhouette.
+    let bb;
+    try {
+      bb = el.getBBox();
+    } catch {
+      return;
+    }
+    if (!(bb.width > 0) || !(bb.height > 0)) return;
+
+    const g = document.createElementNS(SVG_NS, 'g');
+    const xf = el.getAttribute('transform');
+    if (xf) g.setAttribute('transform', xf);
+    g.setAttribute('pointer-events', 'none');
+
+    const poly = document.createElementNS(SVG_NS, 'rect');
+    poly.setAttribute('x', bb.x);
+    poly.setAttribute('y', bb.y);
+    poly.setAttribute('width', bb.width);
+    poly.setAttribute('height', bb.height);
     poly.setAttribute('fill', 'none');
     poly.setAttribute('stroke', '#2563eb');
     poly.setAttribute('stroke-width', '1.5');
     poly.setAttribute('stroke-dasharray', '4 2');
-    poly.setAttribute('pointer-events', 'none');
-    this.handles.appendChild(poly);
+    poly.setAttribute('vector-effect', 'non-scaling-stroke');
+    g.appendChild(poly);
 
-    const br = corners[2];
     const handle = document.createElementNS(SVG_NS, 'rect');
-    handle.setAttribute('x', br.x - 4);
-    handle.setAttribute('y', br.y - 4);
+    handle.setAttribute('x', bb.x + bb.width - 4);
+    handle.setAttribute('y', bb.y + bb.height - 4);
     handle.setAttribute('width', 8);
     handle.setAttribute('height', 8);
     handle.setAttribute('fill', '#2563eb');
@@ -328,7 +306,10 @@ export class Viewport2D {
     handle.setAttribute('vector-effect', 'non-scaling-stroke');
     handle.dataset.handle = 'scale';
     handle.style.cursor = 'nwse-resize';
-    this.handles.appendChild(handle);
+    handle.style.pointerEvents = 'auto';
+    g.appendChild(handle);
+
+    this.handles.appendChild(g);
   }
 
   // ---- hit-test selection -------------------------------------------------

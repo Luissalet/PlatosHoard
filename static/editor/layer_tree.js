@@ -332,8 +332,11 @@ export class LayerTree {
       });
       this.render();
       this.viewport?.renderLayers();
+      this.viewport?.renderSelection();
+      window.dispatchEvent(new CustomEvent('editor:doc-changed'));
     } catch (err) {
       console.error(err);
+      window.alert(`No se pudo cambiar visibilidad: ${err.message}`);
     }
   }
 }

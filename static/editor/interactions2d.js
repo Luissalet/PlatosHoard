@@ -304,28 +304,33 @@ export class Interactions2D {
   }
 
   /**
-   * Fit canvas → clamp roots to usable sheet.
-   * Matrioska → clamp children to parent silhouette (same idea, different rect).
+   * Fit canvas → clamp roots to usable sheet (rect).
+   * Matrioska / nested → clamp children to parent SVG contour (not AABB).
    */
   _maybeClampPose(layerId, pose) {
     const node = store.layerById(layerId);
     if (!node) return pose;
     const asset = store.assetById(node.asset_id);
-    const lb = asset?.local_bounds;
-    if (!lb) return pose;
+    if (!asset) return pose;
 
     try {
       if (store.fitToCanvas && !node.parent_id && store.doc?.canvas) {
+        const lb = affine.measureLocalBounds(asset) || asset.local_bounds;
+        if (!lb) return pose;
         return affine.clampPoseToRect(pose, lb, affine.usableCanvasRect(store.doc.canvas));
       }
-      if (store.matrioskaMode && node.parent_id) {
+      if (node.parent_id && (store.matrioskaMode || store.fitToCanvas)) {
         const parent = store.layerById(node.parent_id);
         const pAsset = store.assetById(parent?.asset_id);
-        if (!pAsset?.local_bounds) return pose;
-        const padding = Number(node.fit?.padding_mm ?? 2.0);
-        return affine.clampPoseToRect(
-          pose, lb, affine.parentFitRect(pAsset.local_bounds, padding),
-        );
+        if (!pAsset) return pose;
+        const padEl = document.getElementById('matrioska-padding-enabled');
+        const padMmEl = document.getElementById('matrioska-padding-mm');
+        let padding = Number(node.fit?.padding_mm ?? 0);
+        if (padEl?.checked) {
+          const v = parseFloat(padMmEl?.value);
+          padding = Number.isFinite(v) && v >= 0 ? v : 0;
+        }
+        return affine.clampPoseInsideSilhouette(asset, pAsset, pose, padding);
       }
     } catch {
       return pose;
@@ -377,18 +382,53 @@ export class Interactions2D {
       return;
     }
     this.pushHistory();
-    store.commitCommand('set_pose', {
-      layer_id: pending.layerId,
-      pose: pending.pose,
-    }).then(() => {
+    this._commitPose(pending.layerId, pending.pose);
+  }
+
+  async _commitPose(layerId, pose) {
+    let finalPose = pose;
+    const node = store.layerById(layerId);
+    // Nested matrioska: authoritative contour constrain (Shapely) before commit.
+    if (node?.parent_id && (store.matrioskaMode || store.fitToCanvas)) {
+      try {
+        const padEl = document.getElementById('matrioska-padding-enabled');
+        const padMmEl = document.getElementById('matrioska-padding-mm');
+        let padding = Number(node.fit?.padding_mm ?? 0);
+        if (padEl?.checked) {
+          const v = parseFloat(padMmEl?.value);
+          padding = Number.isFinite(v) && v >= 0 ? v : 0;
+        }
+        const res = await fetch(
+          `${store.baseUrl}/documents/${encodeURIComponent(store.doc.id)}/constrain`,
+          {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              layer_id: layerId,
+              pose,
+              padding_mm: padding,
+            }),
+          },
+        );
+        const body = await res.json().catch(() => ({}));
+        if (res.ok && body.pose) finalPose = body.pose;
+      } catch (err) {
+        console.warn('constrain failed, using client pose', err);
+      }
+    }
+    try {
+      await store.commitCommand('set_pose', {
+        layer_id: layerId,
+        pose: finalPose,
+      });
       this.viewport.renderLayers();
       this.viewport.renderSelection();
-      window.dispatchEvent(new CustomEvent('editor:pose-changed', { detail: { layerId: pending.layerId } }));
-    }).catch((err) => {
+      window.dispatchEvent(new CustomEvent('editor:pose-changed', { detail: { layerId } }));
+    } catch (err) {
       this._flash(err.message);
-      this.viewport.renderLayers(); // revert visual preview
+      this.viewport.renderLayers();
       this.viewport.renderSelection();
-    });
+    }
   }
 
   _onCancel(e) {

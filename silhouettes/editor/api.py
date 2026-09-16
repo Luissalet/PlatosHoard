@@ -34,7 +34,7 @@ from flask import Blueprint, Flask, current_app, jsonify, request, send_file
 from .asset_adapter import AssetImportError, import_batch
 from .commands import CommandError
 from .composition import compose_document, recipe_summary
-from .constraints import canvas_shape, inner_canvas
+from .constraints import canvas_shape, fits, inner_canvas
 from .document_store import DocumentStore, StoreError
 from .exports import (
     ExportError, build_export_plan, geometry_png, geometry_svg,
@@ -45,7 +45,7 @@ from .jobs import JobScheduler
 from .mesh_adapter import MeshAdapterError, export_stl
 from .models import DocumentError, validate_document
 from .project_io import ProjectIOError, load_package, save_package
-from .transforms import Pose, apply_pose, normalize_asset, reparent_pose, world_pose
+from .transforms import Pose, apply_pose, compose_pose, normalize_asset, reparent_pose, world_pose
 
 log = logging.getLogger("silhouettes.editor.api")
 
@@ -483,6 +483,88 @@ def post_fit(doc_id: str) -> Any:
         return _error_payload("FIT_FAILED", str(exc), 500)
 
     return jsonify(result), 200
+
+
+def _constrain_pose_to_parent(doc: dict, layer_id: str, pose_local: Pose,
+                              padding_mm: float = 1.0) -> Pose:
+    """Return a parent-local pose whose SVG contour stays inside the parent.
+
+    Uses Shapely ``covers`` on the exact polygonised SVG contours.  If the
+    proposed pose already fits, it is returned unchanged; otherwise scale is
+    searched at the same centre, then a full ``fit_inside`` as fallback.
+    """
+    node = doc["layers"][layer_id]
+    parent_id = node.get("parent_id")
+    if parent_id is None:
+        return pose_local
+
+    local_geom = _asset_geometry(doc, node["asset_id"])
+    parent_world = _layer_world_geom(doc, parent_id)
+    pw = world_pose(parent_id, doc["layers"])
+    pose_world = compose_pose(pw, pose_local)
+    candidate = apply_pose(local_geom, pose_world)
+    if fits(parent_world, candidate, padding_mm):
+        return pose_local
+
+    fr = fit_inside(
+        local_geom, parent_world,
+        padding_mm=padding_mm,
+        fixed_center=(pose_world.tx, pose_world.ty),
+        angles_deg=[pose_world.angle_deg],
+        max_evaluations=3000,
+        seed=42,
+    )
+    if fr.pose is None:
+        fr = fit_inside(
+            local_geom, parent_world,
+            padding_mm=padding_mm,
+            angles_deg=[pose_world.angle_deg],
+            max_evaluations=8000,
+            seed=42,
+        )
+    if fr.pose is None:
+        raise FittingError(fr.status, f"constrain: child contour crosses parent ({fr.status})")
+    return reparent_pose(fr.pose, pw)
+
+
+@editor_bp.post("/documents/<doc_id>/constrain")
+def post_constrain(doc_id: str) -> Any:
+    """Clamp a proposed pose so the child SVG contour stays inside the parent.
+
+    Body: {layer_id, pose: {tx,ty,scale,angle_deg}, padding_mm?}
+    """
+    body = _json_body()
+    doc = _load_doc_or_404(doc_id)
+    layer_id = body.get("layer_id")
+    if not layer_id or layer_id not in doc["layers"]:
+        return _error_payload("UNKNOWN_LAYER", f"layer {layer_id!r} not found", 404)
+    raw = body.get("pose") or {}
+    try:
+        pose = Pose(
+            tx=float(raw.get("tx", 0)),
+            ty=float(raw.get("ty", 0)),
+            scale=float(raw.get("scale", 1)),
+            angle_deg=float(raw.get("angle_deg", 0)),
+        )
+        if pose.scale <= 0:
+            raise ValueError("scale must be > 0")
+        padding = float(body.get("padding_mm", 1.0))
+        out = _constrain_pose_to_parent(doc, layer_id, pose, padding_mm=padding)
+    except FittingError as exc:
+        return _error_payload(exc.code if hasattr(exc, "code") else "CONSTRAIN_FAILED",
+                              str(exc), 422)
+    except CommandError as exc:
+        return _error_payload(exc.code, str(exc), exc.status, details=getattr(exc, "details", None))
+    except Exception as exc:
+        log.exception("constrain failed")
+        return _error_payload("CONSTRAIN_FAILED", str(exc), 500)
+
+    return jsonify({
+        "layer_id": layer_id,
+        "pose": _pose_to_dict(out),
+        "pose_local": _pose_to_dict(out),
+        "project_revision": doc["revision"],
+    }), 200
 
 
 # ---------------------------------------------------------------------------

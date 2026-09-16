@@ -184,6 +184,27 @@ button:disabled {
 .insp-row.checkbox-row {
   justify-content: flex-start;
 }
+
+.panel > .checkbox-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 8px;
+  font-size: 0.8rem;
+  color: var(--muted);
+  flex-wrap: wrap;
+}
+.panel > .checkbox-row input[type="number"] {
+  width: 4.5rem;
+  padding: 3px 6px;
+}
+.panel > .checkbox-row .unit {
+  color: var(--muted);
+  font-size: 0.75rem;
+}
+.panel > .checkbox-row input[type="number"]:disabled {
+  opacity: 0.45;
+}
 #inspector h3 {
   margin: 14px 0 6px;
   font-size: 0.78rem;

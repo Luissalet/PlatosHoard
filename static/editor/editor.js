@@ -24,7 +24,8 @@ function enableToolbar(hasDoc) {
   }
   for (const id of ['recipe-select', 'export-selected', 'export-batch', 'fit-best', 'fit-at-position',
                     'matrioska-mode', 'view-inverse', 'fit-to-canvas', 'matrioska-stack',
-                    'matrioska-mode-side', 'view-inverse-side', 'fit-to-canvas-side']) {
+                    'matrioska-mode-side', 'view-inverse-side', 'fit-to-canvas-side',
+                    'matrioska-padding-enabled', 'matrioska-padding-mm', 'auto-scale-drag']) {
     const el = $(id);
     if (el) el.disabled = !hasDoc;
   }
@@ -158,7 +159,7 @@ async function runFit(mode = 'best') {
     flash('Modo matrioska: anida la capa dentro de otra (arrastra al centro de la fila) antes de encajar.');
     return;
   }
-  const padding = Number(node.fit?.padding_mm ?? (matrioska ? 2.0 : 0));
+  const padding = matrioskaPaddingMm(node);
   flash(mode === 'at_position' ? 'Ajustando escala en posición…' : 'Buscando mejor posición…');
   try {
     const res = await fetch(`${store.baseUrl}/documents/${encodeURIComponent(store.doc.id)}/fit`, {
@@ -240,19 +241,34 @@ async function nestAndFit(childId, parentId) {
 }
 
 /**
- * Fit child inside parent silhouette (same idea as Fit canvas → usable rect).
- * Prefers server parent_shape (real contour); falls back to inset AABB.
+ * Optional clearance between child contour and parent contour (mm).
+ * Global UI wins when the padding checkbox is on; else per-layer fit.padding_mm.
  */
-async function fitChildIntoParentPose(childId, parentId) {
-  const child = store.layerById(childId);
-  const parent = store.layerById(parentId);
-  const cAsset = store.assetById(child?.asset_id);
-  const pAsset = store.assetById(parent?.asset_id);
-  if (!cAsset?.local_bounds || !pAsset?.local_bounds) return null;
-  const padding = Number(child?.fit?.padding_mm ?? 2.0);
+function matrioskaPaddingMm(layer = null) {
+  const enabled = !!$('matrioska-padding-enabled')?.checked;
+  if (enabled) {
+    const v = parseFloat($('matrioska-padding-mm')?.value);
+    return Number.isFinite(v) && v >= 0 ? v : 0;
+  }
+  const fromLayer = Number(layer?.fit?.padding_mm);
+  return Number.isFinite(fromLayer) && fromLayer >= 0 ? fromLayer : 0;
+}
 
-  // Server: fit inside the actual parent polygon (not the AABB).
-  try {
+/**
+ * Fit child inside parent using exact SVG contours (server Shapely covers).
+ * Trust the server pose — client AABB/Path2D clamp can corrupt a valid fit.
+ */
+async function fitChildIntoParentPose(childId, _parentId) {
+  const child = store.layerById(childId);
+  if (!child?.parent_id) return null;
+
+  const wanted = matrioskaPaddingMm(child);
+  const attempts = [{ padding_mm: wanted, max_evaluations: 12000 }];
+  if (wanted > 0.5) attempts.push({ padding_mm: wanted * 0.5, max_evaluations: 14000 });
+  if (wanted > 0) attempts.push({ padding_mm: 0, max_evaluations: 18000 });
+
+  let lastErr = 'no feasible';
+  for (const opts of attempts) {
     const res = await fetch(`${store.baseUrl}/documents/${encodeURIComponent(store.doc.id)}/fit`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -260,9 +276,9 @@ async function fitChildIntoParentPose(childId, parentId) {
         layer_id: childId,
         target: 'parent_shape',
         mode: 'best',
-        padding_mm: Number.isFinite(padding) ? padding : 2.0,
-        angles_deg: [0],
-        max_evaluations: 5000,
+        padding_mm: opts.padding_mm,
+        angles_deg: [Number(child.pose?.angle_deg) || 0],
+        max_evaluations: opts.max_evaluations,
         seed: 42,
         request_seq: Date.now(),
       }),
@@ -270,19 +286,68 @@ async function fitChildIntoParentPose(childId, parentId) {
     const body = await res.json().catch(() => ({}));
     if (res.ok) {
       const pose = body.pose_local || body.pose;
-      if (pose && Number.isFinite(pose.scale) && pose.scale > 0) return pose;
+      if (pose && Number.isFinite(pose.scale) && pose.scale > 0) {
+        pose._used_padding_mm = opts.padding_mm;
+        return pose;
+      }
+      lastErr = 'respuesta sin pose';
+    } else {
+      lastErr = body?.error?.message || `HTTP ${res.status}`;
     }
-  } catch (err) {
-    console.warn('parent_shape fit failed, using AABB', err);
   }
+  throw new Error(lastErr);
+}
 
-  // Fallback: AABB inset — use generous padding so we stay inside the silhouette.
-  const pb = pAsset.local_bounds;
-  const minSide = Math.min(pb[2] - pb[0], pb[3] - pb[1]);
-  const inset = Math.max(padding, minSide * 0.12);
-  const rect = affine.parentFitRect(pb, inset);
-  if (!(rect.right > rect.left) || !(rect.bottom > rect.top)) return null;
-  return affine.fitPoseToRect(cAsset.local_bounds, rect, child.pose?.angle_deg || 0);
+function layerArea(layer) {
+  const asset = store.assetById(layer.asset_id);
+  const lb = affine.measureLocalBounds(asset) || asset?.local_bounds;
+  if (!lb) return 0;
+  return Math.max(0, lb[2] - lb[0]) * Math.max(0, lb[3] - lb[1]);
+}
+
+function layerDepth(layerId) {
+  let d = 0;
+  let cur = store.layerById(layerId)?.parent_id;
+  const seen = new Set();
+  while (cur && !seen.has(cur)) {
+    seen.add(cur);
+    d += 1;
+    cur = store.layerById(cur)?.parent_id;
+  }
+  return d;
+}
+
+/** Nested children in top-down order (parent before child). */
+function nestedLayersTopDown() {
+  return Object.values(store.doc?.layers || {})
+    .filter((l) => !l.locked && l.parent_id)
+    .sort((a, b) => layerDepth(a.id) - layerDepth(b.id) || (a.order ?? 0) - (b.order ?? 0));
+}
+
+/**
+ * Force a single matrioska chain: largest → … → smallest.
+ * Detach first so a wrong existing tree (siblings, inverted) is rebuilt.
+ */
+async function remountMatrioskaChain(layers) {
+  const ordered = [...layers].sort((a, b) => layerArea(b) - layerArea(a));
+  if (ordered.length < 2) return ordered;
+
+  // Leaves → roots: clear parents without creating cycles mid-way.
+  for (const layer of [...ordered].reverse()) {
+    if (layer.parent_id) {
+      await store.commitCommand('set_parent', {
+        layer_id: layer.id,
+        new_parent_id: null,
+      });
+    }
+  }
+  for (let i = 1; i < ordered.length; i++) {
+    await store.commitCommand('set_parent', {
+      layer_id: ordered[i].id,
+      new_parent_id: ordered[i - 1].id,
+    });
+  }
+  return ordered;
 }
 
 /** Fit canvas: max-scale every root into the usable sheet. */
@@ -311,18 +376,15 @@ async function applyFitToCanvasAll() {
 }
 
 /**
- * Matrioska = Fit canvas but target = parent silhouette.
- * For every child with a parent: max-scale inside the parent's shape.
+ * Matrioska = fit every nested child into its parent contour, top-down.
  */
 async function applyMatrioskaFitAll() {
   if (!store.doc?.layers) return;
-  const layers = Object.values(store.doc.layers);
   let n = 0;
-  for (const layer of layers) {
-    if (layer.locked || !layer.parent_id) continue;
-    const pose = await fitChildIntoParentPose(layer.id, layer.parent_id);
-    if (!pose) continue;
+  for (const layer of nestedLayersTopDown()) {
     try {
+      const pose = await fitChildIntoParentPose(layer.id, layer.parent_id);
+      if (!pose) continue;
       await store.commitCommand('apply_fit_result', {
         layer_id: layer.id,
         pose,
@@ -334,44 +396,62 @@ async function applyMatrioskaFitAll() {
     }
   }
   flash(n
-    ? `Matrioska: ${n} capa(s) encajada(s) en su silueta padre.`
-    : 'Matrioska: anida capas (suelta una sobre otra) y vuelve a activar.');
+    ? `Matrioska: ${n} hijo(s) encajado(s) por contorno.`
+    : 'Matrioska: no hay hijos anidados. Pulsa Apilar o suelta una capa sobre otra.');
 }
 
 /**
- * Nest root layers largest→smallest, then fit each child into its parent
- * (same as Fit canvas → parent silhouette).
+ * Nest all layers into a size chain (largest parent ← smaller …) and fit
+ * each child into its parent contour top-down. Depth-2+ must be fitted
+ * after the intermediate parent, or the grandchild stays parent-sized.
  */
 async function stackMatrioska() {
-  const roots = store.roots().filter((l) => !l.locked);
-  if (roots.length < 2) {
-    flash('Matrioska: hace falta al menos 2 capas raíz.');
+  const layers = Object.values(store.doc?.layers || {}).filter((l) => !l.locked);
+  if (layers.length < 2) {
+    flash('Matrioska: importa al menos 2 capas.');
     return;
   }
-  const area = (layer) => {
-    const lb = store.assetById(layer.asset_id)?.local_bounds;
-    if (!lb) return 0;
-    return Math.max(0, lb[2] - lb[0]) * Math.max(0, lb[3] - lb[1]);
-  };
-  const ordered = [...roots].sort((a, b) => area(b) - area(a));
-  flash('Apilando matrioska…');
+
+  flash(`Apilando matrioska (${layers.length} capas)…`);
   try {
-    for (let i = 1; i < ordered.length; i++) {
-      const childId = ordered[i].id;
-      const parentId = ordered[i - 1].id;
-      await store.commitCommand('set_parent', {
-        layer_id: childId,
-        new_parent_id: parentId,
-      });
-      const pose = await fitChildIntoParentPose(childId, parentId);
-      if (pose) {
+    await remountMatrioskaChain(layers);
+
+    // Persist optional padding onto each nested child so inspector / drag match Apilar.
+    const pad = matrioskaPaddingMm();
+    if ($('matrioska-padding-enabled')?.checked) {
+      for (const layer of nestedLayersTopDown()) {
+        const fit = { ...(layer.fit || {}), padding_mm: pad, target: 'parent_shape' };
+        try {
+          await store.commitCommand('set_layer_properties', {
+            layer_id: layer.id,
+            fit,
+          });
+        } catch (err) {
+          console.warn('padding persist', err);
+        }
+      }
+    }
+
+    let n = 0;
+    let lastScale = null;
+    const errors = [];
+    // Top-down: fit mid into outer, then inner into mid, …
+    for (const layer of nestedLayersTopDown()) {
+      try {
+        const pose = await fitChildIntoParentPose(layer.id, layer.parent_id);
+        if (!pose) continue;
         await store.commitCommand('apply_fit_result', {
-          layer_id: childId,
+          layer_id: layer.id,
           pose,
           base_revision: store.revision,
         });
+        n += 1;
+        lastScale = pose.scale;
+      } catch (err) {
+        errors.push(`${layer.name || layer.id}: ${err.message}`);
       }
     }
+
     if ($('matrioska-mode')) $('matrioska-mode').checked = true;
     if ($('matrioska-mode-side')) $('matrioska-mode-side').checked = true;
     if ($('view-inverse')) $('view-inverse').checked = false;
@@ -379,7 +459,11 @@ async function stackMatrioska() {
     store.matrioskaMode = true;
     applyViewMode();
     refreshAll();
-    flash('Matrioska: apilada y encajada en cada silueta padre.');
+    if (n) {
+      flash(`Matrioska OK: cadena de ${n + 1} — último hijo escala ${lastScale?.toFixed?.(2) ?? '?'}.`);
+    } else {
+      flash(`Matrioska: no cupo en el contorno${errors[0] ? ` — ${errors[0]}` : ''}.`);
+    }
   } catch (err) {
     flash(`Matrioska: ${err.message}`);
     refreshAll();
@@ -468,11 +552,11 @@ function bindViewToggles() {
           applyViewMode();
           const layers = Object.values(store.doc?.layers || {});
           const hasNesting = layers.some((l) => l.parent_id);
-          if (!hasNesting && store.roots().length >= 2) {
-            // Checking Matrioska with flat roots → nest largest→smallest + fit.
+          // Always run the full stack/fit path — works for flat or already-nested trees.
+          if (layers.filter((l) => !l.locked).length >= 2) {
             await stackMatrioska();
           } else {
-            await applyMatrioskaFitAll();
+            flash('Matrioska: importa al menos 2 capas.');
             refreshAll();
           }
           return;

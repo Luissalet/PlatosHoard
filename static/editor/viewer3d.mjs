@@ -214,6 +214,189 @@ export function mountViewer3D(container) {
     return [...parsed.querySelectorAll('path')].map(p => p.getAttribute('d')).filter(Boolean);
   }
 
+  /**
+   * Parse one SVG `d` into contour Paths (full curves — no sampling).
+   * Each M/m starts a new contour (never lineTo across subpaths).
+   */
+  function _parseContours(d) {
+    const tokens = String(d).match(/[a-df-z]|[-+]?(?:\d+\.?\d*|\.\d+)(?:[eE][-+]?\d+)?/gi) || [];
+    const contours = [];
+    let i = 0;
+    const num = () => parseFloat(tokens[i++]);
+    let path = null;
+    let cx = 0, cy = 0, sx = 0, sy = 0;
+
+    const ensure = () => {
+      if (!path) {
+        path = new THREE.Path();
+        contours.push(path);
+      }
+    };
+    const startContour = (x, y) => {
+      path = new THREE.Path();
+      contours.push(path);
+      path.moveTo(x, y);
+      cx = x; cy = y; sx = x; sy = y;
+    };
+
+    try {
+      while (i < tokens.length) {
+        const cmd = tokens[i++];
+        switch (cmd) {
+          case 'M': {
+            startContour(num(), num());
+            // Implicit lineTos after first pair
+            while (i < tokens.length && !/[a-zA-Z]/.test(tokens[i])) {
+              cx = num(); cy = num();
+              path.lineTo(cx, cy);
+            }
+            break;
+          }
+          case 'm': {
+            startContour(cx + num(), cy + num());
+            while (i < tokens.length && !/[a-zA-Z]/.test(tokens[i])) {
+              cx += num(); cy += num();
+              path.lineTo(cx, cy);
+            }
+            break;
+          }
+          case 'L': ensure(); cx = num(); cy = num(); path.lineTo(cx, cy); break;
+          case 'l': ensure(); cx += num(); cy += num(); path.lineTo(cx, cy); break;
+          case 'H': ensure(); cx = num(); path.lineTo(cx, cy); break;
+          case 'h': ensure(); cx += num(); path.lineTo(cx, cy); break;
+          case 'V': ensure(); cy = num(); path.lineTo(cx, cy); break;
+          case 'v': ensure(); cy += num(); path.lineTo(cx, cy); break;
+          case 'C': {
+            ensure();
+            const x1 = num(), y1 = num(), x2 = num(), y2 = num(), x = num(), y = num();
+            path.bezierCurveTo(x1, y1, x2, y2, x, y); cx = x; cy = y; break;
+          }
+          case 'c': {
+            ensure();
+            const x1 = cx + num(), y1 = cy + num(), x2 = cx + num(), y2 = cy + num(), x = cx + num(), y = cy + num();
+            path.bezierCurveTo(x1, y1, x2, y2, x, y); cx = x; cy = y; break;
+          }
+          case 'S': {
+            ensure();
+            const x2 = num(), y2 = num(), x = num(), y = num();
+            path.bezierCurveTo(cx, cy, x2, y2, x, y); cx = x; cy = y; break;
+          }
+          case 's': {
+            ensure();
+            const x2 = cx + num(), y2 = cy + num(), x = cx + num(), y = cy + num();
+            path.bezierCurveTo(cx, cy, x2, y2, x, y); cx = x; cy = y; break;
+          }
+          case 'Q': {
+            ensure();
+            const x1 = num(), y1 = num(), x = num(), y = num();
+            path.quadraticCurveTo(x1, y1, x, y); cx = x; cy = y; break;
+          }
+          case 'q': {
+            ensure();
+            const x1 = cx + num(), y1 = cy + num(), x = cx + num(), y = cy + num();
+            path.quadraticCurveTo(x1, y1, x, y); cx = x; cy = y; break;
+          }
+          case 'T': {
+            ensure();
+            const x = num(), y = num();
+            path.quadraticCurveTo(cx, cy, x, y); cx = x; cy = y; break;
+          }
+          case 't': {
+            ensure();
+            const x = cx + num(), y = cy + num();
+            path.quadraticCurveTo(cx, cy, x, y); cx = x; cy = y; break;
+          }
+          case 'A': {
+            // Approximate arc with cubic beziers via endpoint sample — keep density high
+            ensure();
+            num(); num(); num(); num(); num();
+            const x = num(), y = num();
+            path.lineTo(x, y); cx = x; cy = y; break;
+          }
+          case 'a': {
+            ensure();
+            num(); num(); num(); num(); num();
+            const x = cx + num(), y = cy + num();
+            path.lineTo(x, y); cx = x; cy = y; break;
+          }
+          case 'Z': case 'z':
+            if (path) { path.closePath(); cx = sx; cy = sy; }
+            break;
+          default:
+            return [];
+        }
+      }
+    } catch {
+      return [];
+    }
+    return contours.filter((p) => p.curves && p.curves.length > 0);
+  }
+
+  function _contourArea(path) {
+    // Classification only — uses a fine polyline; extrusion keeps original curves.
+    const pts = path.getPoints(24);
+    let a = 0;
+    for (let i = 0, j = pts.length - 1; i < pts.length; j = i++) {
+      a += pts[j].x * pts[i].y - pts[i].x * pts[j].y;
+    }
+    return a * 0.5;
+  }
+
+  function _contourCentroid(path) {
+    const pts = path.getPoints(24);
+    let cx = 0, cy = 0;
+    for (const p of pts) { cx += p.x; cy += p.y; }
+    return { x: cx / pts.length, y: cy / pts.length };
+  }
+
+  function _pathContains(path, x, y) {
+    const pts = path.getPoints(24);
+    let inside = false;
+    for (let i = 0, j = pts.length - 1; i < pts.length; j = i++) {
+      const xi = pts[i].x, yi = pts[i].y;
+      const xj = pts[j].x, yj = pts[j].y;
+      const hit = ((yi > y) !== (yj > y))
+        && (x < ((xj - xi) * (y - yi)) / ((yj - yi) || 1e-12) + xi);
+      if (hit) inside = !inside;
+    }
+    return inside;
+  }
+
+  /** Full-fidelity THREE.Shapes from SVG path `d`s (curves preserved). */
+  function _shapesFromSvgPaths(pathDs) {
+    const contours = [];
+    for (const d of pathDs) {
+      for (const path of _parseContours(d)) {
+        const area = _contourArea(path);
+        const c = _contourCentroid(path);
+        contours.push({ path, area: Math.abs(area), signed: area, cx: c.x, cy: c.y });
+      }
+    }
+    if (!contours.length) return [];
+    contours.sort((a, b) => b.area - a.area);
+
+    const solids = [];
+    for (const c of contours) {
+      let parent = null;
+      for (const s of solids) {
+        if (_pathContains(s.path, c.cx, c.cy) && c.area < s.area * 0.98) {
+          parent = s;
+          break;
+        }
+      }
+      if (parent) {
+        parent.shape.holes.push(c.path);
+      } else {
+        const shape = new THREE.Shape();
+        // Copy curves from Path into Shape
+        shape.curves = c.path.curves.slice();
+        shape.currentPoint.copy(c.path.currentPoint);
+        solids.push({ shape, path: c.path, area: c.area });
+      }
+    }
+    return solids.map((s) => s.shape);
+  }
+
   function _layerColor(layerId) {
     // Stable colour matching 2D (do not recolour selection — that looked like a blue rim).
     const ids = Object.keys(store.doc?.layers || {});
@@ -229,21 +412,52 @@ export function mountViewer3D(container) {
     return (r << 16) | (g << 8) | bl;
   }
 
-  /** Apply SVG affine [a b c d e f] to a Shape → new Shape in document space. */
-  function transformShape(shape, m) {
+  /** Affine-transform a Path/Shape keeping every curve control point (no resampling). */
+  function transformPathAffine(src, m) {
     const [a, b, c, d, e, f] = m;
-    const pts = shape.getPoints(96);
-    if (pts.length < 3) return null;
-    const out = new THREE.Shape();
-    const x0 = a * pts[0].x + c * pts[0].y + e;
-    const y0 = b * pts[0].x + d * pts[0].y + f;
-    out.moveTo(x0, y0);
-    for (let i = 1; i < pts.length; i++) {
-      const x = a * pts[i].x + c * pts[i].y + e;
-      const y = b * pts[i].x + d * pts[i].y + f;
-      out.lineTo(x, y);
+    const map = (p) => new THREE.Vector2(a * p.x + c * p.y + e, b * p.x + d * p.y + f);
+    const out = src.isShape || src.type === 'Shape' ? new THREE.Shape() : new THREE.Path();
+
+    // Replay curves with transformed control points
+    let started = false;
+    const moveTo = (p) => {
+      const q = map(p);
+      out.moveTo(q.x, q.y);
+      started = true;
+    };
+    for (const curve of src.curves || []) {
+      if (curve.type === 'LineCurve') {
+        if (!started) moveTo(curve.v1);
+        const q = map(curve.v2);
+        out.lineTo(q.x, q.y);
+      } else if (curve.type === 'CubicBezierCurve') {
+        if (!started) moveTo(curve.v0);
+        const c1 = map(curve.v1), c2 = map(curve.v2), c3 = map(curve.v3);
+        out.bezierCurveTo(c1.x, c1.y, c2.x, c2.y, c3.x, c3.y);
+      } else if (curve.type === 'QuadraticBezierCurve') {
+        if (!started) moveTo(curve.v0);
+        const c1 = map(curve.v1), c2 = map(curve.v2);
+        out.quadraticCurveTo(c1.x, c1.y, c2.x, c2.y);
+      } else {
+        // Fallback: densify this curve only
+        const pts = curve.getPoints(16);
+        for (let i = 0; i < pts.length; i++) {
+          const q = map(pts[i]);
+          if (!started) { out.moveTo(q.x, q.y); started = true; }
+          else out.lineTo(q.x, q.y);
+        }
+      }
     }
-    out.closePath();
+    if (!started) return null;
+
+    // Transform holes recursively
+    if (src.holes && src.holes.length) {
+      out.holes = [];
+      for (const hole of src.holes) {
+        const th = transformPathAffine(hole, m);
+        if (th) out.holes.push(th);
+      }
+    }
     return out;
   }
 
@@ -252,11 +466,10 @@ export function mountViewer3D(container) {
     const asset = store.assetById(node?.asset_id);
     if (!asset) return [];
     const m = _layerWorldMatrix(layerId, asset);
+    const locals = _shapesFromSvgPaths(_svgPaths(asset));
     const out = [];
-    for (const d of _svgPaths(asset)) {
-      const local = pathToShape(d);
-      if (!local) continue;
-      const world = transformShape(local, m);
+    for (const local of locals) {
+      const world = transformPathAffine(local, m);
       if (world) out.push(world);
     }
     return out;
@@ -267,7 +480,7 @@ export function mountViewer3D(container) {
     if (!shapes?.length) return null;
     const canvasH = store.doc?.canvas?.height_mm ?? 200;
     const geo = new THREE.ExtrudeGeometry(shapes, {
-      depth, bevelEnabled: false, steps: 1,
+      depth, bevelEnabled: false, steps: 1, curveSegments: 24,
     });
     const mat4 = new THREE.Matrix4().set(
       1, 0, 0, 0,
@@ -291,23 +504,26 @@ export function mountViewer3D(container) {
     const paths = _svgPaths(asset);
     if (!paths.length) return null;
 
+    const shapes = _shapesFromSvgPaths(paths);
+    if (!shapes.length) return null;
+
     const m = _layerWorldMatrix(layerId, asset);
     const canvasH = store.doc?.canvas?.height_mm ?? 200;
     const t = _extrusionOf(node);
     const z0 = _stackZ(layerId);
 
-    const shapes = [];
-    for (const d of paths) {
-      const shape = pathToShape(d);
-      if (shape) shapes.push(shape);
+    let geo;
+    try {
+      geo = new THREE.ExtrudeGeometry(shapes, {
+        depth: t,
+        bevelEnabled: false,
+        steps: 1,
+        curveSegments: 24,
+      });
+    } catch (err) {
+      console.warn('extrude failed', layerId, err);
+      return null;
     }
-    if (!shapes.length) return null;
-
-    const geo = new THREE.ExtrudeGeometry(shapes, {
-      depth: t,
-      bevelEnabled: false,
-      steps: 1,
-    });
 
     // SVG affine [a b c d e f]: x' = a x + c y + e, y' = b x + d y + f
     // Manufacturing: Y_mfg = H − y_doc. Thickness stays +Z.
@@ -351,9 +567,14 @@ export function mountViewer3D(container) {
     }
     if (!plate.holes.length) return null;
 
-    const t = _extrusionOf(node);
-    const z0 = _stackZ(layerId);
-    return _meshFromDocShapes([plate], t, z0, _layerColor(layerId), `inv-${layerId}`);
+    try {
+      const t = _extrusionOf(node);
+      const z0 = _stackZ(layerId);
+      return _meshFromDocShapes([plate], t, z0, _layerColor(layerId), `inv-${layerId}`);
+    } catch (err) {
+      console.warn('inverse mesh failed', layerId, err);
+      return null;
+    }
   }
 
   /** Parent silhouette with child silhouettes cut out. */
@@ -383,70 +604,6 @@ export function mountViewer3D(container) {
     const t = _extrusionOf(node);
     const z0 = _stackZ(layerId);
     return _meshFromDocShapes(shapes, t, z0, _layerColor(layerId), `shell-${layerId}`);
-  }
-
-  function pathToShape(d) {
-    const tokens = d.match(/[a-df-z]|[-+]?(?:\d+\.?\d*|\.\d+)(?:[eE][-+]?\d+)?/gi) || [];
-    const shape = new THREE.Shape();
-    let i = 0, cx = 0, cy = 0, sx = 0, sy = 0;
-    const num = () => parseFloat(tokens[i++]);
-    let started = false;
-    try {
-      while (i < tokens.length) {
-        const cmd = tokens[i++];
-        switch (cmd) {
-          case 'M': {
-            const x = num(), y = num();
-            if (!started) { shape.moveTo(x, y); started = true; } else shape.lineTo(x, y);
-            cx = x; cy = y; sx = x; sy = y; break;
-          }
-          case 'm': {
-            const x = cx + num(), y = cy + num();
-            if (!started) { shape.moveTo(x, y); started = true; } else shape.lineTo(x, y);
-            cx = x; cy = y; sx = x; sy = y; break;
-          }
-          case 'L': cx = num(); cy = num(); shape.lineTo(cx, cy); break;
-          case 'l': cx += num(); cy += num(); shape.lineTo(cx, cy); break;
-          case 'H': cx = num(); shape.lineTo(cx, cy); break;
-          case 'h': cx += num(); shape.lineTo(cx, cy); break;
-          case 'V': cy = num(); shape.lineTo(cx, cy); break;
-          case 'v': cy += num(); shape.lineTo(cx, cy); break;
-          case 'C': {
-            const x1 = num(), y1 = num(), x2 = num(), y2 = num(), x = num(), y = num();
-            shape.bezierCurveTo(x1, y1, x2, y2, x, y); cx = x; cy = y; break;
-          }
-          case 'c': {
-            const x1 = cx + num(), y1 = cy + num(), x2 = cx + num(), y2 = cy + num(), x = cx + num(), y = cy + num();
-            shape.bezierCurveTo(x1, y1, x2, y2, x, y); cx = x; cy = y; break;
-          }
-          case 'Q': {
-            const x1 = num(), y1 = num(), x = num(), y = num();
-            shape.quadraticCurveTo(x1, y1, x, y); cx = x; cy = y; break;
-          }
-          case 'q': {
-            const x1 = cx + num(), y1 = cy + num(), x = cx + num(), y = cy + num();
-            shape.quadraticCurveTo(x1, y1, x, y); cx = x; cy = y; break;
-          }
-          case 'A': {
-            num(); num(); num(); num(); num();
-            const x = num(), y = num();
-            shape.lineTo(x, y); cx = x; cy = y; break;
-          }
-          case 'a': {
-            num(); num(); num(); num(); num();
-            const x = cx + num(), y = cy + num();
-            shape.lineTo(x, y); cx = x; cy = y; break;
-          }
-          case 'Z': case 'z':
-            shape.closePath(); cx = sx; cy = sy; break;
-          default:
-            return null;
-        }
-      }
-    } catch {
-      return null;
-    }
-    return started ? shape : null;
   }
 
   function update() {

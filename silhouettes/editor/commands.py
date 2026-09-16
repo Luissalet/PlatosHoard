@@ -180,9 +180,13 @@ def cmd_set_layer_properties(doc: dict, payload: Mapping[str, Any]) -> dict:
 
     # Accept either a nested ``fields`` object or flat keys (the client sends
     # flat keys, e.g. {layer_id, name, visible}).  Both are whitelisted below.
+    # Ignore envelope echoes (base_revision) that must not count as fields.
     fields = payload.get("fields")
     if not isinstance(fields, Mapping) or not fields:
-        fields = {k: v for k, v in payload.items() if k != "layer_id"}
+        fields = {
+            k: v for k, v in payload.items()
+            if k not in ("layer_id", "base_revision", "command_id")
+        }
     if not fields:
         raise CommandError("INVALID_STRUCTURE", "no layer properties provided")
 

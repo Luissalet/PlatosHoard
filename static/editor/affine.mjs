@@ -191,3 +191,207 @@ export function pathToLocalMatrix(asset) {
   }
   return N;
 }
+
+/** Transform axis-aligned [x0,y0,x1,y1] by SVG affine matrix → new AABB. */
+export function transformBounds(bounds, M) {
+  const [x0, y0, x1, y1] = bounds;
+  const pts = [
+    point(M, { x: x0, y: y0 }),
+    point(M, { x: x1, y: y0 }),
+    point(M, { x: x1, y: y1 }),
+    point(M, { x: x0, y: y1 }),
+  ];
+  const xs = pts.map((p) => p.x), ys = pts.map((p) => p.y);
+  return [Math.min(...xs), Math.min(...ys), Math.max(...xs), Math.max(...ys)];
+}
+
+/**
+ * Local-mm AABB of the *rendered* silhouette (path coords × pathToLocalMatrix).
+ * Falls back to asset.local_bounds if measurement fails.
+ */
+export function measureLocalBounds(asset) {
+  if (!asset) return null;
+  const fallback = asset.local_bounds || null;
+  if (!asset.canonical_svg || typeof document === 'undefined') return fallback;
+  try {
+    const parsed = new DOMParser().parseFromString(asset.canonical_svg, 'image/svg+xml');
+    const paths = [...parsed.querySelectorAll('path')];
+    if (!paths.length) return fallback;
+
+    const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+    svg.setAttribute('width', '0');
+    svg.setAttribute('height', '0');
+    svg.style.cssText = 'position:absolute;left:-9999px;visibility:hidden';
+    const g = document.createElementNS('http://www.w3.org/2000/svg', 'g');
+    for (const p of paths) {
+      const np = document.createElementNS('http://www.w3.org/2000/svg', 'path');
+      np.setAttribute('d', p.getAttribute('d') || '');
+      g.appendChild(np);
+    }
+    svg.appendChild(g);
+    document.body.appendChild(svg);
+    let bb;
+    try {
+      bb = g.getBBox();
+    } finally {
+      svg.remove();
+    }
+    if (!(bb.width > 0) || !(bb.height > 0)) return fallback;
+
+    const N = pathToLocalMatrix(asset);
+    return transformBounds([bb.x, bb.y, bb.x + bb.width, bb.y + bb.height], N);
+  } catch {
+    return fallback;
+  }
+}
+
+/** `d` attributes from canonical SVG paths. */
+export function extractPathDs(svgText) {
+  if (!svgText || typeof DOMParser === 'undefined') return [];
+  try {
+    const doc = new DOMParser().parseFromString(svgText, 'image/svg+xml');
+    return [...doc.querySelectorAll('path')]
+      .map((p) => p.getAttribute('d') || '')
+      .filter(Boolean);
+  } catch {
+    return [];
+  }
+}
+
+/**
+ * Dense outline samples in local mm (path → N). Used for silhouette containment.
+ */
+export function sampleLocalOutline(asset, samplesPerPath = 80) {
+  if (!asset?.canonical_svg || typeof document === 'undefined') return [];
+  const ds = extractPathDs(asset.canonical_svg);
+  if (!ds.length) return [];
+  const N = pathToLocalMatrix(asset);
+  const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+  svg.setAttribute('width', '0');
+  svg.setAttribute('height', '0');
+  svg.style.cssText = 'position:absolute;left:-9999px;visibility:hidden';
+  document.body.appendChild(svg);
+  const pts = [];
+  try {
+    for (const d of ds) {
+      const el = document.createElementNS('http://www.w3.org/2000/svg', 'path');
+      el.setAttribute('d', d);
+      svg.appendChild(el);
+      const len = el.getTotalLength();
+      if (!(len > 0)) continue;
+      const n = Math.max(24, Math.min(samplesPerPath, Math.ceil(len / 1.5)));
+      for (let i = 0; i < n; i++) {
+        const sp = el.getPointAtLength((i / n) * len);
+        pts.push(point(N, { x: sp.x, y: sp.y }));
+      }
+    }
+  } finally {
+    svg.remove();
+  }
+  return pts;
+}
+
+/** Parent silhouette Path2D in *source* SVG units + inverse of N (local→source). */
+export function localPath2D(asset) {
+  if (!asset?.canonical_svg || typeof Path2D === 'undefined') return null;
+  const ds = extractPathDs(asset.canonical_svg);
+  if (!ds.length) return null;
+  const out = new Path2D();
+  for (const dAttr of ds) out.addPath(new Path2D(dAttr));
+  return { path: out, localToSource: inverse(pathToLocalMatrix(asset)) };
+}
+
+let _hitCtx = null;
+function hitCtx() {
+  if (_hitCtx) return _hitCtx;
+  if (typeof document === 'undefined') return null;
+  const c = document.createElement('canvas');
+  c.width = 1;
+  c.height = 1;
+  _hitCtx = c.getContext('2d');
+  return _hitCtx;
+}
+
+/**
+ * True iff every (optionally radially padded) child outline sample lies inside
+ * the parent SVG contour. Child samples are local-mm; pose maps them to parent-local.
+ */
+export function poseInsideParentSilhouette(childLocalPts, pose, parentHit, paddingMm = 0) {
+  const ctx = hitCtx();
+  if (!ctx || !parentHit?.path || !childLocalPts?.length) return true;
+  const M = matrix(pose);
+  const pad = Math.max(0, Number(paddingMm) || 0);
+  const cx = pose.tx, cy = pose.ty;
+  const toSrc = parentHit.localToSource;
+  for (const lp of childLocalPts) {
+    let pp = point(M, lp);
+    if (pad > 0) {
+      const dx = pp.x - cx, dy = pp.y - cy;
+      const r = Math.hypot(dx, dy);
+      if (r > 1e-9) {
+        pp = { x: pp.x + (dx / r) * pad, y: pp.y + (dy / r) * pad };
+      }
+    }
+    const sp = point(toSrc, pp);
+    if (!ctx.isPointInPath(parentHit.path, sp.x, sp.y)) return false;
+  }
+  return true;
+}
+
+/**
+ * Clamp pose so the child SVG contour stays inside the parent SVG contour.
+ * Shrinks about (tx,ty), then walks toward the parent centroid if needed.
+ * This is contour containment — not AABB.
+ */
+export function clampPoseInsideSilhouette(childAsset, parentAsset, pose, paddingMm = 1) {
+  const childPts = sampleLocalOutline(childAsset, 96);
+  const parentPath = localPath2D(parentAsset);
+  if (!childPts.length || !parentPath) return { ...pose };
+
+  let p = {
+    tx: Number(pose.tx) || 0,
+    ty: Number(pose.ty) || 0,
+    scale: Math.max(1e-6, Number(pose.scale) || 1),
+    angle_deg: Number(pose.angle_deg) || 0,
+  };
+  if (poseInsideParentSilhouette(childPts, p, parentPath, paddingMm)) return p;
+
+  const parentPts = sampleLocalOutline(parentAsset, 48);
+  let gx = 0, gy = 0;
+  if (parentPts.length) {
+    for (const q of parentPts) { gx += q.x; gy += q.y; }
+    gx /= parentPts.length;
+    gy /= parentPts.length;
+  }
+
+  const searchAt = (tx, ty, maxScale) => {
+    let lo = 1e-6, hi = Math.max(1e-6, maxScale), best = null;
+    for (let i = 0; i < 28; i++) {
+      const mid = (lo + hi) / 2;
+      const cand = { tx, ty, scale: mid, angle_deg: p.angle_deg };
+      if (poseInsideParentSilhouette(childPts, cand, parentPath, paddingMm)) {
+        best = cand;
+        lo = mid;
+      } else {
+        hi = mid;
+      }
+    }
+    return best;
+  };
+
+  let best = searchAt(p.tx, p.ty, p.scale);
+  if (best) return best;
+
+  // Walk center toward parent centroid while shrinking.
+  for (let step = 1; step <= 12; step++) {
+    const t = step / 12;
+    const tx = p.tx + (gx - p.tx) * t;
+    const ty = p.ty + (gy - p.ty) * t;
+    best = searchAt(tx, ty, p.scale * (1 - 0.5 * t));
+    if (best) return best;
+  }
+
+  // Last resort: tiny at centroid.
+  best = searchAt(gx, gy, p.scale);
+  return best || { tx: gx, ty: gy, scale: Math.max(1e-6, p.scale * 0.05), angle_deg: p.angle_deg };
+}
