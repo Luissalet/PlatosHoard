@@ -4,7 +4,7 @@
     "schema_version": 2,
     "id": "doc_7a24e3b37e0c",
     "name": "Nuevo documento",
-    "revision": 95,
+    "revision": 103,
     "units": "mm",
     "canvas": {
       "width_mm": 200.0,
@@ -177,7 +177,7 @@
           "angle_deg": 0
         },
         "stack_rank": 0,
-        "visible": false
+        "visible": true
       },
       "layer_0e647b159266_0": {
         "asset_id": "asset_0e647b159266",
@@ -205,7 +205,7 @@
           "angle_deg": 0
         },
         "stack_rank": 1,
-        "visible": false
+        "visible": true
       }
     }
   },
@@ -684,6 +684,46 @@
       "type": "set_layer_properties",
       "status": "committed",
       "revision": 95
+    },
+    "cmd_1789573797816_1": {
+      "type": "set_layer_properties",
+      "status": "committed",
+      "revision": 96
+    },
+    "cmd_1789573798849_2": {
+      "type": "set_layer_properties",
+      "status": "committed",
+      "revision": 97
+    },
+    "cmd_1789573817974_1": {
+      "type": "set_layer_properties",
+      "status": "committed",
+      "revision": 98
+    },
+    "cmd_1789573818837_2": {
+      "type": "set_layer_properties",
+      "status": "committed",
+      "revision": 99
+    },
+    "cmd_1789573820528_3": {
+      "type": "set_layer_properties",
+      "status": "committed",
+      "revision": 100
+    },
+    "cmd_1789573821281_4": {
+      "type": "set_layer_properties",
+      "status": "committed",
+      "revision": 101
+    },
+    "cmd_1789574126997_1": {
+      "type": "set_layer_properties",
+      "status": "committed",
+      "revision": 102
+    },
+    "cmd_1789574308293_1": {
+      "type": "set_layer_properties",
+      "status": "committed",
+      "revision": 103
     }
   }
 }

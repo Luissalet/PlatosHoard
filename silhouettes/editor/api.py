@@ -34,7 +34,7 @@ from flask import Blueprint, Flask, current_app, jsonify, request, send_file
 from .asset_adapter import AssetImportError, import_batch
 from .commands import CommandError
 from .composition import compose_document, recipe_summary
-from .constraints import canvas_shape, fits, inner_canvas
+from .constraints import canvas_shape, fits, inner_canvas, material, polygon_parts
 from .document_store import DocumentStore, StoreError
 from .exports import (
     ExportError, build_export_plan, geometry_png, geometry_svg,
@@ -46,6 +46,7 @@ from .mesh_adapter import MeshAdapterError, export_stl
 from .models import DocumentError, validate_document
 from .project_io import ProjectIOError, load_package, save_package
 from .transforms import Pose, apply_pose, compose_pose, normalize_asset, reparent_pose, world_pose
+from shapely.ops import unary_union
 
 log = logging.getLogger("silhouettes.editor.api")
 
@@ -610,6 +611,117 @@ def post_preview(doc_id: str) -> Any:
         "mode": mode,
         "request_seq": request_seq,
         "project_revision": doc["revision"],
+        "layers": results,
+    }), 200
+
+
+def _ring_coords(coords) -> list[list[float]]:
+    """Closed ring as [[x,y], ...] (drop duplicate closing vertex)."""
+    pts = [[float(c[0]), float(c[1])] for c in coords]
+    if len(pts) >= 2 and pts[0] == pts[-1]:
+        pts = pts[:-1]
+    return pts
+
+
+def _geometry_to_rings(geom) -> list[dict]:
+    """Shapely polygon(s) → list of {exterior, holes} for ExtrudeGeometry."""
+    out = []
+    for poly in polygon_parts(geom):
+        if poly.is_empty or poly.area <= 0:
+            continue
+        exterior = _ring_coords(poly.exterior.coords)
+        if len(exterior) < 3:
+            continue
+        holes = []
+        for interior in poly.interiors:
+            h = _ring_coords(interior.coords)
+            if len(h) >= 3:
+                holes.append(h)
+        out.append({"exterior": exterior, "holes": holes})
+    return out
+
+
+@editor_bp.post("/documents/<doc_id>/mesh-rings")
+def post_mesh_rings(doc_id: str) -> Any:
+    """Return manufacturing polygon rings for 3D preview (islands included).
+
+    Body: {
+      mode: "normal"|"inverse"|"shell",
+      layer_ids?: [...],
+      include_subtree?: bool  // default false — each layer is independent (C − S_i only)
+    }
+
+    Uses the same Shapely/evenodd path as export — not the client SVG parser.
+    """
+    body = _json_body()
+    doc = _load_doc_or_404(doc_id)
+    mode = body.get("mode", "inverse")
+    if mode not in ("normal", "inverse", "shell"):
+        return _error_payload("UNKNOWN_MODE", f"unknown recipe mode {mode!r}", 400)
+
+    layer_ids = body.get("layer_ids")
+    if not layer_ids:
+        layer_ids = list(doc["layers"].keys())
+    include_subtree = bool(body.get("include_subtree", False))
+
+    canvas = doc["canvas"]
+    C = canvas_shape(canvas["width_mm"], canvas["height_mm"])
+    results = {}
+
+    try:
+        for lid in layer_ids:
+            if lid not in doc["layers"]:
+                continue
+            ids = [lid]
+            if include_subtree and mode == "inverse":
+                stack = [lid]
+                seen = {lid}
+                while stack:
+                    cur = stack.pop()
+                    for oid, other in doc["layers"].items():
+                        if other.get("parent_id") == cur and oid not in seen:
+                            seen.add(oid)
+                            ids.append(oid)
+                            stack.append(oid)
+
+            if mode == "inverse" and include_subtree and len(ids) > 1:
+                shapes = []
+                for sid in ids:
+                    try:
+                        shapes.append(_layer_world_geom(doc, sid))
+                    except Exception:
+                        pass
+                if not shapes:
+                    continue
+                shape = unary_union(shapes)
+                geom = material(C.difference(shape))
+                if geom.is_empty:
+                    continue
+            else:
+                geoms = compose_document(doc, [lid], mode, lenient=True)
+                geom = geoms.get(lid)
+                if geom is None or geom.is_empty:
+                    continue
+
+            node = doc["layers"][lid]
+            ext = node.get("extrusion_mm")
+            if ext is None:
+                ext = doc.get("default_extrusion_mm", 3)
+            results[lid] = {
+                "rings": _geometry_to_rings(geom),
+                "extrusion_mm": float(ext),
+            }
+    except Exception as exc:
+        log.exception("mesh-rings failed")
+        return _error_payload("MESH_RINGS_FAILED", str(exc), 500)
+
+    return jsonify({
+        "mode": mode,
+        "project_revision": doc["revision"],
+        "canvas": {
+            "width_mm": canvas["width_mm"],
+            "height_mm": canvas["height_mm"],
+        },
         "layers": results,
     }), 200
 

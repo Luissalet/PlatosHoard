@@ -507,9 +507,9 @@ function setViewHint(mode) {
   const el = $('view-mode-hint');
   if (!el) return;
   el.textContent = mode === 'inverse'
-    ? 'Modo: INVERSA (plancha con huecos)'
+    ? 'Modo: INVERSA (1 plancha por capa)'
     : mode === 'shell'
-      ? 'Modo: MATRIOSKA (hijo encima del padre, fit a silueta)'
+      ? 'Modo: MATRIOSKA (solo encaje 2D; 3D independiente)'
       : 'Modo: normal';
 }
 

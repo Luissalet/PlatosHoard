@@ -83,13 +83,12 @@ export class Viewport2D {
     this.renderSelection();
   }
 
-  /** Plancha del canvas con hueco de la capa y sus descendientes. */
+  /** Plancha del canvas con hueco = solo esta capa (hijos = otras planchas). */
   _renderInverseMode() {
     const c = store.doc.canvas;
     const W = c.width_mm, H = c.height_mm;
-    // Prefer the selection; otherwise all roots (one plate each).
-    let targets = store.selectedId ? [store.selectedId] : store.roots().map((r) => r.id);
-    if (!targets.length) targets = this._drawOrder();
+    // One independent plate per visible layer — never mix children into the hole.
+    const targets = this._drawOrder();
 
     for (const layerId of targets) {
       const node = store.layerById(layerId);
@@ -104,15 +103,8 @@ export class Viewport2D {
       const keep = this._rect(0, 0, W, H, '');
       keep.setAttribute('fill', '#ffffff');
       mask.appendChild(keep);
-      // Cut this layer AND its descendants (matrioska stack hole)
-      const subtree = store.subtreeIds(layerId);
-      for (const sid of subtree) {
-        const sn = store.layerById(sid);
-        if (!sn || !this._effectiveVisible(sn)) continue;
-        const sa = store.assetById(sn.asset_id);
-        const hole = this._pathsGroup(sid, sa, '#000000');
-        if (hole) mask.appendChild(hole);
-      }
+      const hole = this._pathsGroup(layerId, asset, '#000000');
+      if (hole) mask.appendChild(hole);
       this.defs.appendChild(mask);
 
       const plate = this._rect(0, 0, W, H, 'layer inverse-plate');

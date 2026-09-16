@@ -50,30 +50,48 @@ function _extrusionOf(node) {
   return (v === null || v === undefined) ? (store.doc?.default_extrusion_mm ?? 3) : v;
 }
 
-function _stackZ(layerId) {
-  // Hierarchy stacking: each child sits on top of its parent (independent plate).
-  // Sibling roots still order by stack_rank among roots only.
+/** Normal hierarchical Z: parent below, children progressively above. */
+function _stackZNormal(layerId) {
   const gap = store.doc?.stack_gap_mm ?? 0.4;
   const node = store.layerById(layerId);
   if (!node) return 0;
-
   if (node.parent_id) {
     const parent = store.layerById(node.parent_id);
     if (!parent) return 0;
-    // Children of same parent: slight rank offset so they don't z-fight
     const sibs = store.childrenOf(node.parent_id);
     const idx = Math.max(0, sibs.findIndex((s) => s.id === layerId));
-    return _stackZ(node.parent_id) + _extrusionOf(parent) + gap + idx * 0.05;
+    return _stackZNormal(node.parent_id) + _extrusionOf(parent) + gap + idx * 0.05;
   }
-
-  // Root: stack below/above other roots by stack_rank
   const roots = store.roots().slice().sort((a, b) => (a.stack_rank ?? 0) - (b.stack_rank ?? 0));
   let z = 0;
   for (const r of roots) {
     if (r.id === layerId) break;
+    if (!_effectiveVisible(r)) continue;
     z += _extrusionOf(r) + gap;
   }
   return z;
+}
+
+/**
+ * Normal: parent below, children above.
+ * Inverse: flip — deepest child below, parents progressively above.
+ */
+function _stackZ(layerId) {
+  const node = store.layerById(layerId);
+  if (!node) return 0;
+  const normalZ = _stackZNormal(layerId);
+  if ((store.viewMode || 'normal') !== 'inverse') return normalZ;
+
+  let maxTop = 0;
+  for (const l of Object.values(store.doc?.layers || {})) {
+    if (!_effectiveVisible(l)) continue;
+    maxTop = Math.max(maxTop, _stackZNormal(l.id) + _extrusionOf(l));
+  }
+  return Math.max(0, maxTop - normalZ - _extrusionOf(node));
+}
+
+function _allLayerIds() {
+  return Object.keys(store.doc?.layers || {});
 }
 
 export function mountViewer3D(container) {
@@ -543,7 +561,7 @@ export function mountViewer3D(container) {
     return mesh;
   }
 
-  /** Canvas plate with holes for layer (+ descendants). */
+  /** One plate = canvas − THIS layer only (children are separate plates). */
   function buildInverseMesh(layerId) {
     const node = store.layerById(layerId);
     if (!node || !_effectiveVisible(node)) return null;
@@ -557,12 +575,17 @@ export function mountViewer3D(container) {
     plate.lineTo(0, H);
     plate.closePath();
 
-    const subtree = store.subtreeIds(layerId);
-    for (const sid of subtree) {
-      const sn = store.layerById(sid);
-      if (!sn || !_effectiveVisible(sn)) continue;
-      for (const hole of _worldShapes(sid)) {
-        plate.holes.push(hole);
+    const islands = [];
+    for (const sil of _worldShapes(layerId)) {
+      const outer = new THREE.Path();
+      outer.curves = (sil.curves || []).slice();
+      if (sil.currentPoint) outer.currentPoint.copy(sil.currentPoint);
+      plate.holes.push(outer);
+      for (const h of sil.holes || []) {
+        const island = new THREE.Shape();
+        island.curves = (h.curves || []).slice();
+        if (h.currentPoint) island.currentPoint.copy(h.currentPoint);
+        islands.push(island);
       }
     }
     if (!plate.holes.length) return null;
@@ -570,11 +593,35 @@ export function mountViewer3D(container) {
     try {
       const t = _extrusionOf(node);
       const z0 = _stackZ(layerId);
-      return _meshFromDocShapes([plate], t, z0, _layerColor(layerId), `inv-${layerId}`);
+      return _meshFromDocShapes([plate, ...islands], t, z0, _layerColor(layerId), `inv-${layerId}`);
     } catch (err) {
       console.warn('inverse mesh failed', layerId, err);
       return null;
     }
+  }
+
+  /** Build mesh from server Shapely rings (full evenodd + islands). */
+  function _meshFromRings(rings, depth, z0, color, name) {
+    if (!rings?.length) return null;
+    const shapes = [];
+    for (const ring of rings) {
+      const ext = ring.exterior;
+      if (!ext || ext.length < 3) continue;
+      const shape = new THREE.Shape();
+      shape.moveTo(ext[0][0], ext[0][1]);
+      for (let i = 1; i < ext.length; i++) shape.lineTo(ext[i][0], ext[i][1]);
+      shape.closePath();
+      for (const hole of ring.holes || []) {
+        if (!hole || hole.length < 3) continue;
+        const hp = new THREE.Path();
+        hp.moveTo(hole[0][0], hole[0][1]);
+        for (let i = 1; i < hole.length; i++) hp.lineTo(hole[i][0], hole[i][1]);
+        hp.closePath();
+        shape.holes.push(hp);
+      }
+      shapes.push(shape);
+    }
+    return _meshFromDocShapes(shapes, depth, z0, color, name);
   }
 
   /** Parent silhouette with child silhouettes cut out. */
@@ -606,6 +653,64 @@ export function mountViewer3D(container) {
     return _meshFromDocShapes(shapes, t, z0, _layerColor(layerId), `shell-${layerId}`);
   }
 
+  let _inverseSeq = 0;
+
+  async function _loadInverseFromServer(targets) {
+    const seq = ++_inverseSeq;
+    const rev = store.revision;
+    try {
+      const res = await fetch(
+        `${store.baseUrl}/documents/${encodeURIComponent(store.doc.id)}/mesh-rings`,
+        {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            mode: 'inverse',
+            layer_ids: targets,
+            include_subtree: false,
+          }),
+        },
+      );
+      const body = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(body?.error?.message || `HTTP ${res.status}`);
+      if (seq !== _inverseSeq || store.revision !== rev || store.viewMode !== 'inverse') return;
+
+      while (assembly.children.length) {
+        const ch = assembly.children[0];
+        assembly.remove(ch);
+        ch.geometry?.dispose?.();
+        ch.material?.dispose?.();
+      }
+      syncSheetAndGrid();
+
+      for (const layerId of targets) {
+        const entry = body.layers?.[layerId];
+        if (!entry?.rings?.length) continue;
+        const node = store.layerById(layerId);
+        if (!node || !_effectiveVisible(node)) continue;
+        const t = entry.extrusion_mm ?? _extrusionOf(node);
+        const z0 = _stackZ(layerId);
+        const mesh = _meshFromRings(entry.rings, t, z0, _layerColor(layerId), `inv-${layerId}`);
+        if (mesh) {
+          if (layerId === store.selectedId) {
+            mesh.material.emissive = new THREE.Color(0x1d4ed8);
+            mesh.material.emissiveIntensity = 0.2;
+          }
+          assembly.add(mesh);
+        }
+      }
+      frameStable();
+    } catch (err) {
+      console.warn('inverse mesh-rings failed, client fallback', err);
+      if (seq !== _inverseSeq) return;
+      for (const layerId of targets) {
+        const mesh = buildInverseMesh(layerId);
+        if (mesh) assembly.add(mesh);
+      }
+      frameStable();
+    }
+  }
+
   function update() {
     resize();
     while (assembly.children.length) {
@@ -618,53 +723,23 @@ export function mountViewer3D(container) {
     if (!store.doc) { frameStable(); return; }
 
     const mode = store.viewMode || 'normal';
+    const targets = _allLayerIds();
 
     if (mode === 'inverse') {
-      let targets = store.selectedId ? [store.selectedId] : store.roots().map((r) => r.id);
-      if (!targets.length) targets = Object.keys(store.doc.layers || {});
-      for (const layerId of targets) {
-        const mesh = buildInverseMesh(layerId);
-        if (mesh) assembly.add(mesh);
+      _loadInverseFromServer(targets);
+      return;
+    }
+
+    for (const layerId of targets) {
+      const node = store.layerById(layerId);
+      if (!node || !_effectiveVisible(node)) continue;
+      const mesh = buildLayerMesh(layerId);
+      if (!mesh) continue;
+      if (layerId === store.selectedId) {
+        mesh.material.emissive = new THREE.Color(0x1d4ed8);
+        mesh.material.emissiveIntensity = 0.25;
       }
-      // Nested children as solid plates stacked above
-      for (const layerId of targets) {
-        const addDesc = (id) => {
-          for (const ch of store.childrenOf(id)) {
-            if (_effectiveVisible(ch)) {
-              const m = buildLayerMesh(ch.id);
-              if (m) {
-                if (ch.id === store.selectedId) {
-                  m.material.emissive = new THREE.Color(0x1d4ed8);
-                  m.material.emissiveIntensity = 0.25;
-                }
-                assembly.add(m);
-              }
-            }
-            addDesc(ch.id);
-          }
-        };
-        addDesc(layerId);
-      }
-    } else {
-      // Matrioska / normal: every layer is an independent solid plate, stacked in Z.
-      // No shell holes — those looked like a rim and hid child colour.
-      const visit = (parentId) => {
-        for (const child of store.childrenOf(parentId)) {
-          const node = store.layerById(child.id);
-          if (node && _effectiveVisible(node)) {
-            const mesh = buildLayerMesh(child.id);
-            if (mesh) {
-              if (child.id === store.selectedId) {
-                mesh.material.emissive = new THREE.Color(0x1d4ed8);
-                mesh.material.emissiveIntensity = 0.25;
-              }
-              assembly.add(mesh);
-            }
-          }
-          visit(child.id);
-        }
-      };
-      visit(null);
+      assembly.add(mesh);
     }
     frameStable();
   }
