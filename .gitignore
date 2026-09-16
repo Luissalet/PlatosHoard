@@ -3,3 +3,8 @@
 __pycache__
 .odysseus
 .venv
+docs
+_ref
+.playwright-mcp
+.pytest_cache
+node_modules

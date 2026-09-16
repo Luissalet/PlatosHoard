@@ -1,0 +1,133 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="utf-8"/>
+  <meta name="viewport" content="width=device-width, initial-scale=1"/>
+  <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate"/>
+  <title>Silhouettes — Editor de capas</title>
+  <link rel="stylesheet" href="/static/editor/editor.css?v=20260316j"/>
+</head>
+<body class="editor-shell">
+  <header id="document-toolbar" class="editor-toolbar" role="toolbar" aria-label="Documento">
+    <div class="toolbar-group">
+      <button type="button" id="editor-new" disabled>Nuevo</button>
+      <button type="button" id="editor-save" disabled>Guardar</button>
+      <button type="button" id="editor-open" disabled>Abrir</button>
+      <button type="button" id="editor-undo" disabled>Deshacer</button>
+      <button type="button" id="editor-redo" disabled>Rehacer</button>
+    </div>
+    <div class="toolbar-group canvas-controls" aria-label="Canvas">
+      <label>Ancho <input id="canvas-width-mm" type="number" min="1" step="0.1" value="200" disabled/></label>
+      <label>Alto <input id="canvas-height-mm" type="number" min="1" step="0.1" value="200" disabled/></label>
+      <label>Sup <input id="canvas-padding-top" type="number" min="0" step="0.1" value="5" disabled/></label>
+      <label>Dere <input id="canvas-padding-right" type="number" min="0" step="0.1" value="5" disabled/></label>
+      <label>Inf <input id="canvas-padding-bottom" type="number" min="0" step="0.1" value="5" disabled/></label>
+      <label>Izq <input id="canvas-padding-left" type="number" min="0" step="0.1" value="5" disabled/></label>
+    </div>
+    <div class="toolbar-group view-toolbar" aria-label="Vista">
+      <label class="tb-check"><input id="matrioska-mode" type="checkbox" checked disabled/> Matrioska</label>
+      <label class="tb-check"><input id="view-inverse" type="checkbox" disabled/> Inversa</label>
+      <label class="tb-check"><input id="fit-to-canvas" type="checkbox" disabled/> Fit canvas</label>
+    </div>
+    <div class="toolbar-group">
+      <label class="file-label">Importar
+        <input id="import-files" type="file" multiple accept=".png,.svg,image/png,image/svg+xml" disabled/>
+      </label>
+      <a class="link" href="/" target="_blank" rel="noreferrer">Vista antigua</a>
+    </div>
+  </header>
+
+  <main class="editor-main">
+    <aside class="editor-left" aria-label="Capas">
+      <div class="panel-resizer panel-resizer-left" role="separator" aria-orientation="vertical"></div>
+
+      <section class="panel panel-vista">
+        <h2>Vista</h2>
+        <div class="vista-list">
+          <label class="vista-row" title="Como Fit canvas, pero encaja cada hijo al máximo dentro de la silueta padre">
+            <input id="matrioska-mode-side" type="checkbox" checked disabled/>
+            <span class="vista-title">Matrioska</span>
+            <span class="vista-desc">Fit a silueta + hijo encima</span>
+          </label>
+          <label class="vista-row" title="Plancha con huecos en 2D y 3D">
+            <input id="view-inverse-side" type="checkbox" disabled/>
+            <span class="vista-title">Inversa</span>
+            <span class="vista-desc">Plancha con huecos</span>
+          </label>
+          <label class="vista-row" title="Escala máxima al padding; no permite salir del lienzo">
+            <input id="fit-to-canvas-side" type="checkbox" disabled/>
+            <span class="vista-title">Fit canvas</span>
+            <span class="vista-desc">Máximo tamaño / clamping</span>
+          </label>
+        </div>
+        <p class="hint" id="view-mode-hint">Modo: normal</p>
+      </section>
+
+      <section class="panel">
+        <h2>Capas</h2>
+        <p class="hint" id="layers-hint">Matrioska = fit dentro del padre. Suelta una capa sobre otra para anidar; luego Activa Matrioska o usa Apilar.</p>
+        <div class="button-row">
+          <button type="button" id="matrioska-stack" disabled title="Anida raíces de mayor a menor y encaja">Apilar matrioska</button>
+        </div>
+        <div id="layer-tree" class="layer-tree" aria-live="polite">
+          <p class="empty-state">Sin capas. Importa PNG/SVG.</p>
+        </div>
+      </section>
+
+      <section class="panel">
+        <h2>Exportar</h2>
+        <select id="recipe-select" disabled>
+          <option value="batch_all" selected>Lote completo (3 familias)</option>
+          <option value="normal_registered">Normal apilada</option>
+          <option value="inverse_registered">Inversa (huecos)</option>
+          <option value="normal_fullframe">Normal a recuadro</option>
+        </select>
+        <div class="button-row">
+          <button type="button" id="export-selected" disabled>Exportar selección</button>
+          <button type="button" id="export-batch" disabled>Exportar lote</button>
+        </div>
+      </section>
+
+      <section class="panel">
+        <h2>Ajuste</h2>
+        <div class="button-row">
+          <button type="button" id="fit-best" disabled>Buscar mejor posición</button>
+          <button type="button" id="fit-at-position" disabled>Ajustar en posición</button>
+        </div>
+        <label class="checkbox-row"><input id="auto-scale-drag" type="checkbox" disabled/> Escala automática al mover</label>
+        <div id="fit-status" class="fit-status" aria-live="polite"></div>
+      </section>
+    </aside>
+
+    <section class="editor-center" aria-label="Editor 2D">
+      <svg id="editor-svg" viewBox="0 0 200 200" preserveAspectRatio="xMidYMid meet" role="img">
+        <defs id="editor-defs"></defs>
+        <g id="canvas-guides"></g>
+        <g id="layer-content"></g>
+        <g id="constraint-overlays" pointer-events="none"></g>
+        <g id="selection-handles"></g>
+      </svg>
+    </section>
+
+    <aside class="editor-right" aria-label="Inspector y 3D">
+      <div class="panel-resizer panel-resizer-right" role="separator" aria-orientation="vertical"></div>
+      <section class="panel" id="inspector">
+        <h2>Inspector</h2>
+        <p class="empty-state">Sin selección.</p>
+      </section>
+      <section class="panel viewer-panel">
+        <h2>Montaje 3D</h2>
+        <div id="viewer-3d" class="viewer-3d"></div>
+      </section>
+      <section class="panel errors-panel">
+        <h2>Errores</h2>
+        <div id="errors-panel"><p class="empty-state">Sin errores.</p></div>
+      </section>
+    </aside>
+  </main>
+
+  <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/build/three.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/controls/OrbitControls.js"></script>
+  <script type="module" src="/static/editor/editor.js?v=20260316j"></script>
+</body>
+</html>

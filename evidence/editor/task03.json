@@ -1,0 +1,16 @@
+{
+  "task": "03_store",
+  "date": "2026-09-15",
+  "commit": "ccccfb973837ff5992d58a3bc0edc7446a4caaf2",
+  "changed_files": [
+    "silhouettes/editor/commands.py",
+    "silhouettes/editor/document_store.py",
+    "silhouettes/editor/api.py",
+    "tests/editor/test_store.py"
+  ],
+  "executed_checks": [
+    "python -m pytest tests/editor/test_store.py -q: 13 passed in 4.14s",
+    "python -m pytest tests/ -q: 110 passed, 1 failed (pre-existing star iou 0.9755 < 0.98, not lowered)"
+  ],
+  "notes": "Store por documento con RLock (un solo proceso, documentado). CAS exacto de §8.3: idempotencia por command_id (ventana 128) -> 409 REVISION_CONFLICT -> copia -> aplicar -> validar -> revision+1 -> temp+fsync+os.replace. Envelope persistido atómico con documento + resultados de comandos. set_pose/set_canvas/set_layer_properties implementados; el resto rechaza UNKNOWN_COMMAND (422), no simula éxito. API: POST /api/v2/documents (201), GET /api/v2/documents/{id} (200/404), POST /api/v2/documents/{id}/commands con errores uniformes §8.4. Tests: revision incrementa una vez, 409 en base_revision repetida, replay idempotente sin doble movimiento, archivo nunca truncado, temporales huérfanos limpiados, 8 hilos concurrentes sin pérdida de updates. Siguiente tarea: 04_jobs."
+}

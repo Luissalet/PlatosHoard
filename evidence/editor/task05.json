@@ -1,0 +1,38 @@
+{
+  "task": "05_importacion",
+  "date": "2026-09-15",
+  "files_created": [
+    "silhouettes/editor/asset_adapter.py",
+    "tests/editor/test_import.py"
+  ],
+  "files_modified": [
+    "silhouettes/editor/commands.py",
+    "silhouettes/editor/api.py"
+  ],
+  "tests": {
+    "command": "python -m pytest tests/editor/test_import.py -q",
+    "result": "22 passed in 1.93s",
+    "full_suite": "152 passed, 1 failed (pre-existing star IoU 0.9755 < 0.98, not lowered)"
+  },
+  "gates_verified": [
+    "PNG import uses prepare_mask → trace_mask → parse_vector → vector_to_polygons (no full pipeline call)",
+    "SVG import uses parse_vector directly (no rasterisation)",
+    "SVG with <script> rejected with SVG_REJECTED",
+    "SVG with <foreignObject> rejected with SVG_REJECTED",
+    "SVG with on* event handlers rejected with SVG_REJECTED",
+    "SVG with <text> rejected with SVG_REJECTED",
+    "Empty PNG (no foreground) rejected with EMPTY_MASK",
+    "Unsupported extension rejected with UNSUPPORTED_TYPE",
+    "import_batch: 2 valid + 1 invalid → 2 assets, 1 error (no silent substitution)",
+    "import_batch: dedup by source_sha256 (same file twice → 1 asset_id)",
+    "import_batch: >16 files rejected with BATCH_TOO_LARGE",
+    "add_layers: two layers can reference the same asset (dedup by hash)",
+    "add_layers: duplicate layer_id rejected with DUPLICATE_ID",
+    "add_layers: unknown asset reference rejected",
+    "POST /assets: 3 files → 3 assets + 3 root layers in one transaction",
+    "POST /assets: mixed valid/invalid → imported count is accurate, errors listed by name",
+    "POST /assets: no files → 400, unknown doc → 404",
+    "normalisation_pose centres bounds at origin (tx = -cx*k, ty = -cy*k)"
+  ],
+  "notes": "asset_adapter.py is the only module that knows the raster→SVG engine signatures. It does not touch silhouettes/mesh.py or pipeline.py."
+}

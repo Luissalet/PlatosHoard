@@ -9,7 +9,7 @@ from PIL import Image, ImageDraw
 from shapely import contains_xy
 from shapely.affinity import scale
 from shapely.ops import unary_union
-from pipeline import process_image
+from pipeline import process_image, MESH_FLATTEN_TOLERANCE_PX
 from silhouettes.mask import prepare_mask
 from silhouettes.trace import trace_mask, PRESETS
 from silhouettes.vector import parse_vector, vector_to_polygons
@@ -88,7 +88,7 @@ def test_real_end_to_end(kind, tmp_path):
     rendered = rendered_svg_mask(svg, 200, 200)
     projected = polygon_mask(cap_image_space, 200, 200)
     assert iou(rendered, projected) >= 0.995, "Rendered SVG and STL cap disagree"
-    vector_material = unary_union(vector_to_polygons(parse_vector(svg, tolerance=0.1)))
+    vector_material = unary_union(vector_to_polygons(parse_vector(svg, tolerance=MESH_FLATTEN_TOLERANCE_PX)))
     assert cap_image_space.symmetric_difference(vector_material).area / vector_material.area < 1e-4
     assert mesh.volume == pytest.approx(vector_material.area * 5, rel=1e-5)
     if kind == "donut":

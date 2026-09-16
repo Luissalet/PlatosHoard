@@ -1,0 +1,223 @@
+// store.js — canonical document store + UI state (tasks 07, 08)
+// The document is the single source of truth. UI state (selection, zoom,
+// pan) is kept SEPARATE and never written back into the document.
+
+export class EditorStore {
+  constructor(baseUrl = '/api/v2') {
+    this.baseUrl = baseUrl;
+    this.doc = null;            // canonical document (server state)
+    this.revision = 0;
+    this.selectedId = null;     // UI state — not part of the document
+    this.viewport = { x: 0, y: 0, scale: 1 }; // UI state
+    this.viewMode = 'normal';   // 'normal' | 'inverse' | 'shell'
+    this._recipePreview = null; // {layerId: {svg, summary}} from /preview
+    this.fitToCanvas = false;   // constrain + max-fit roots to usable canvas
+    this.matrioskaMode = false; // constrain + max-fit children inside parent silhouette
+    this._commandSeq = 0;
+    // Undo/redo history (spec §13.4): confirmed contents only, max 100 actions.
+    this.history = [];           // snapshots: {assets, layers}
+    this.historyIndex = -1;      // index of the current state in history
+  }
+
+  // ---- document lifecycle -------------------------------------------------
+
+  async createDocument(name = 'Nuevo documento', canvas = null) {
+    const body = { name };
+    if (canvas) body.canvas = canvas;
+    const res = await fetch(`${this.baseUrl}/documents`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    });
+    if (!res.ok) throw await this._error(res);
+    this._applyDocumentPayload(await res.json());
+    return this.doc;
+  }
+
+  async loadDocument(docId) {
+    const res = await fetch(`${this.baseUrl}/documents/${encodeURIComponent(docId)}`);
+    if (!res.ok) throw await this._error(res);
+    this._applyDocumentPayload(await res.json());
+    return this.doc;
+  }
+
+  async commitCommand(type, payload, commandId = null) {
+    this._commandSeq += 1;
+    const envelope = {
+      command_id: commandId || `cmd_${Date.now()}_${this._commandSeq}`,
+      base_revision: this.revision,
+      type,
+      payload,
+    };
+    const res = await fetch(`${this.baseUrl}/documents/${encodeURIComponent(this.doc.id)}/commands`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(envelope),
+    });
+    if (!res.ok) throw await this._error(res);
+    const result = await res.json();
+    if (type !== 'restore_snapshot') {
+      // Record the pre-action state so undo can restore it (one gesture = one action).
+      this._pushHistory();
+    }
+    this._applyDocumentPayload(result);
+    this._syncHistoryPointer();
+    return result;
+  }
+
+  /**
+   * Normalize server payloads that may be either a bare document or
+   * {document, revision} (and historically a double-wrapped import).
+   */
+  _applyDocumentPayload(payload) {
+    if (!payload || typeof payload !== 'object') return;
+    let doc = payload;
+    if (payload.document && typeof payload.document === 'object') {
+      doc = payload.document;
+      // Unwrap accidental double-nesting from older import responses.
+      if (doc.document && doc.document.layers && !doc.layers) {
+        doc = doc.document;
+      }
+    }
+    if (doc.layers !== undefined || doc.assets !== undefined || doc.canvas) {
+      this.doc = doc;
+      this.revision = payload.revision ?? doc.revision ?? this.revision;
+    }
+  }
+
+  // ---- undo / redo (spec §13.4) -------------------------------------------
+
+  _snapshot() {
+    return {
+      assets: JSON.parse(JSON.stringify(this.doc?.assets ?? {})),
+      layers: JSON.parse(JSON.stringify(this.doc?.layers ?? {})),
+    };
+  }
+
+  _pushHistory() {
+    if (!this.doc) return;
+    // A new action after undo empties redo.
+    if (this.historyIndex < this.history.length - 1) {
+      this.history.length = this.historyIndex + 1;
+    }
+    this.history.push(this._snapshot());
+    if (this.history.length > 100) this.history.shift();
+    this.historyIndex = this.history.length - 1;
+  }
+
+  _syncHistoryPointer() {
+    // After a restore_snapshot the current state equals the snapshot we
+    // just restored; move the pointer there so redo/undo stay consistent.
+    if (this.historyIndex >= 0 && this.history[this.historyIndex]) {
+      const cur = this._snapshot();
+      const same = (a, b) => JSON.stringify(a) === JSON.stringify(b);
+      if (same(this.history[this.historyIndex], cur)) return;
+    }
+    // Fallback: treat the current state as the newest entry.
+    if (this.history.length === 0) {
+      this.history.push(this._snapshot());
+      this.historyIndex = 0;
+    }
+  }
+
+  canUndo() {
+    return this.historyIndex >= 0;
+  }
+
+  canRedo() {
+    return this.historyIndex < this.history.length - 1;
+  }
+
+  async undo() {
+    if (!this.canUndo()) return null;
+    const snapshot = this.history[this.historyIndex];
+    const result = await this.commitCommand('restore_snapshot', { snapshot });
+    this.historyIndex -= 1;
+    return result;
+  }
+
+  async redo() {
+    if (!this.canRedo()) return null;
+    const snapshot = this.history[this.historyIndex + 1];
+    const result = await this.commitCommand('restore_snapshot', { snapshot });
+    this.historyIndex += 1;
+    return result;
+  }
+
+  // ---- selection (UI state, not persisted) --------------------------------
+
+  select(layerId) {
+    this.selectedId = layerId;
+  }
+
+  clearSelection() {
+    this.selectedId = null;
+  }
+
+  // ---- viewport (UI state, not persisted) ---------------------------------
+
+  setViewport(x, y, scale) {
+    this.viewport = { x, y, scale };
+  }
+
+  // ---- helpers ------------------------------------------------------------
+
+  layerById(id) {
+    return this.doc?.layers?.[id] || null;
+  }
+
+  assetById(id) {
+    return this.doc?.assets?.[id] || null;
+  }
+
+  childrenOf(parentId) {
+    if (!this.doc?.layers) return [];
+    return Object.values(this.doc.layers)
+      .filter(l => l.parent_id === parentId)
+      .sort((a, b) => (a.order ?? 0) - (b.order ?? 0));
+  }
+
+  roots() {
+    if (!this.doc?.layers) return [];
+    return Object.values(this.doc.layers)
+      .filter(l => l.parent_id === null || l.parent_id === undefined)
+      .sort((a, b) => (a.order ?? 0) - (b.order ?? 0));
+  }
+
+  subtreeIds(rootId) {
+    const out = [rootId];
+    const walk = (id) => {
+      for (const child of this.childrenOf(id)) {
+        out.push(child.id);
+        walk(child.id);
+      }
+    };
+    walk(rootId);
+    return out;
+  }
+
+  isAncestor(ancestorId, descendantId) {
+    let cur = descendantId;
+    const seen = new Set();
+    while (cur != null && !seen.has(cur)) {
+      if (cur === ancestorId) return true;
+      seen.add(cur);
+      cur = this.layerById(cur)?.parent_id ?? null;
+    }
+    return false;
+  }
+
+  async _error(res) {
+    let body = {};
+    try { body = await res.json(); } catch { /* ignore */ }
+    const err = new Error(body?.error?.message || `HTTP ${res.status}`);
+    err.status = res.status;
+    err.code = body?.error?.code || 'HTTP_ERROR';
+    err.details = body?.error?.details || {};
+    err.layerId = body?.error?.layer_id || null;
+    return err;
+  }
+}
+
+// Singleton for the page
+export const store = new EditorStore();

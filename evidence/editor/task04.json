@@ -1,0 +1,30 @@
+{
+  "task": "04_jobs",
+  "date": "2026-09-15",
+  "files_created": [
+    "silhouettes/editor/jobs.py",
+    "tests/editor/test_jobs.py"
+  ],
+  "files_modified": [
+    "silhouettes/editor/api.py",
+    "app.py"
+  ],
+  "tests": {
+    "command": "python -m pytest tests/editor/test_jobs.py -q",
+    "result": "20 passed in 10.33s",
+    "full_suite": "130 passed, 1 failed (pre-existing star IoU 0.9755 < 0.98)"
+  },
+  "gates_verified": [
+    "worker_main is module-level, no closures pickled",
+    "spawn context used, pool has exactly 1 worker",
+    "cooperative cancellation via shared mp.Event passed via pool initializer",
+    "cancelled job never modifies document revision",
+    "shutdown marks in-flight jobs as failed (SERVER_RESTART), not completed",
+    "download_path rejects path traversal outside output_dir",
+    "GET /api/v2/jobs/<id> returns 404 for unknown job",
+    "POST /api/v2/jobs/<id>/cancel returns 409 for terminal job",
+    "GET /api/v2/jobs/<id>/download returns 409 for non-completed job",
+    "app.py uses freeze_support() and use_reloader=False"
+  ],
+  "notes": "Cancel event passed via Pool(initializer=...) not task payload — CPython forbids pickling mp.Event into apply_async args."
+}

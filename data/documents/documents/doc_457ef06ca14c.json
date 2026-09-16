@@ -1,0 +1,287 @@
+{
+  "envelope_version": 1,
+  "document": {
+    "schema_version": 2,
+    "id": "doc_457ef06ca14c",
+    "name": "QA walk",
+    "revision": 2,
+    "units": "mm",
+    "canvas": {
+      "width_mm": 200.0,
+      "height_mm": 200.0,
+      "padding_mm": {
+        "top": 5.0,
+        "right": 5.0,
+        "bottom": 5.0,
+        "left": 5.0
+      }
+    },
+    "default_extrusion_mm": 3.0,
+    "stack_gap_mm": 0.0,
+    "assets": {
+      "asset_88b28fa86cef": {
+        "id": "asset_88b28fa86cef",
+        "name": "asset_88b28fa86cef",
+        "source_type": "png",
+        "source_uri": "assets/asset_88b28fa86cef/source.png",
+        "canonical_svg_uri": "assets/asset_88b28fa86cef/canonical.svg",
+        "source_sha256": "b88b65647ab04b6fe252bcd8372ee449e6e546dc387e12b76dfd1964e86f79c4",
+        "source_viewbox": [
+          0.0,
+          0.0,
+          200.0,
+          200.0
+        ],
+        "mm_per_source_unit": 0.26458333333333334,
+        "normalization_pose": {
+          "tx": -28.36992327734375,
+          "ty": -26.587573690124515,
+          "scale": 0.26458333333333334,
+          "angle_deg": 0.0
+        },
+        "geometry_hash": "1b771e5274a9afb93e3b853ec8f1f51db5d23a8a7347069f60aa0d428dcbf62d",
+        "trace_settings": {
+          "preset": "exact"
+        },
+        "curve_tolerance_source": 0.1,
+        "canonical_svg": "<svg xmlns=\"http://www.w3.org/2000/svg\" version=\"1.1\" width=\"200\" height=\"200\" viewBox=\"16 16 200 200\" overflow=\"hidden\">\n<path d=\"M151,91C161.65489,89.49015,172.87316,88.39548,183.40092,91.27492C187.55213,92.41031,191.99256,94.25552,195.4375,96.875C200.17963,100.48084,205.85497,107.17942,206.75,113.25C206.95912,114.66836,206.84498,116.3584,206.71412,117.78555C205.59896,129.94794,194.10137,139.24781,182.88122,142.16759C178.52057,143.30235,174.26477,143.14693,169.80678,143.12743C163.46534,143.0997,157.28944,142.92148,151,142C151.47051,142.87141,151.94102,143.74281,152.42578,144.64063C159.23419,157.53559,163.64192,170.58593,159.875,185.25C157.31265,192.73254,152.88658,198.17412,146,202C140.13568,203.95477,134.11237,203.76831,128.375,201.4375C118.42066,196.39023,111.78397,188.12905,107.74609,177.78906C105.55205,170.97213,104.0775,164.07464,103,157C102.62488,157.39832,102.62488,157.39832,100.72656,159.41406C90.39835,170.18712,79.81977,177.87979,64.47656,178.99609C57.05832,179.00779,50.72477,176.74042,45,172C39.50984,164.96133,39.32426,158.67528,40,150C42.41656,138.74993,50.96259,129.63546,60.35938,123.50391C64.75972,120.99779,69.32202,118.92989,74,117C71.01778,115.01186,68.00102,113.44601,64.8125,111.8125C53.917,105.93546,44.41829,97.42161,40.43359,85.26953C39.23542,78.998,39.13158,72.55956,41.1875,66.5C45.66544,60.32353,50.69925,56.34221,58.12891,54.46094C68.9569,52.79509,78.89611,56.27062,88,62C93.39275,66.26613,98.15297,71.13587,103,76C103.10957,75.38383,103.10957,75.38383,103.66406,72.26563C106.42849,57.50857,110.43525,45.33405,122,35C129.56904,30.04596,138.70626,27.71041,147.25,31.5625C153.83551,35.34086,157.52793,40.97411,160,48C163.367,62.41646,159.5467,76.58023,152.17188,89.12109C151.97852,89.43111,151.97852,89.43111,151,91Z\" fill=\"#000000\" />\n</svg>\n"
+      },
+      "asset_999d7409d9dd": {
+        "id": "asset_999d7409d9dd",
+        "name": "asset_999d7409d9dd",
+        "source_type": "png",
+        "source_uri": "assets/asset_999d7409d9dd/source.png",
+        "canonical_svg_uri": "assets/asset_999d7409d9dd/canonical.svg",
+        "source_sha256": "19445d5f3bded0e3fbc7e8818159ab38a4a078e51c00b6cbe08e9764f6190561",
+        "source_viewbox": [
+          0.0,
+          0.0,
+          200.0,
+          200.0
+        ],
+        "mm_per_source_unit": 0.26458333333333334,
+        "normalization_pose": {
+          "tx": -26.592505904248558,
+          "ty": -26.65311671347459,
+          "scale": 0.26458333333333334,
+          "angle_deg": 0.0
+        },
+        "geometry_hash": "d57e26ed01b83d471d5e0612bd89c677fe5ef1cf987337cc514d68ec33eda80c",
+        "trace_settings": {
+          "preset": "exact"
+        },
+        "curve_tolerance_source": 0.1,
+        "canonical_svg": "<svg xmlns=\"http://www.w3.org/2000/svg\" version=\"1.1\" width=\"200\" height=\"200\" viewBox=\"16 16 200 200\" overflow=\"hidden\">\n<path d=\"M113.30469,207.03516C88.54151,205.87879,65.99451,194.89943,49,177C32.71043,158.49731,24.97984,134.39811,26.125,109.875C28.6281,84.95906,40.04055,63.05053,58.80859,46.52734C94.44196,18.33976,144.39697,20.00903,178.1875,50.25C196.85971,67.65252,205.79545,90.81402,207,116C207.23403,140.59901,196.89304,163.65544,179.90234,181.18359C162.02659,198.90322,138.11586,206.79911,113.30469,207.03516ZM130,68C124.9346,66.5581,119.55148,66.07784,114.29958,66.27155C92.50151,67.07557,76.06065,81.05338,68.66786,101.10562C67.15963,105.19653,66.50164,109.56171,66.29595,113.90608C65.72825,125.89594,68.91016,137.12222,76.26386,146.67199C84.28234,157.08508,97.31319,164.96418,110.43876,166.42987C131.30508,168.75995,149.82748,159.34035,160.1368,141.02881C162.15987,137.43541,164.11923,133.33539,165.18101,129.34226C166.54122,124.22679,166.96046,118.81697,166.69537,113.54015C165.5748,91.23464,150.63041,74.94806,130,68Z\" fill=\"#000000\" />\n</svg>\n"
+      },
+      "asset_bb0e18e5df26": {
+        "id": "asset_bb0e18e5df26",
+        "name": "asset_bb0e18e5df26",
+        "source_type": "png",
+        "source_uri": "assets/asset_bb0e18e5df26/source.png",
+        "canonical_svg_uri": "assets/asset_bb0e18e5df26/canonical.svg",
+        "source_sha256": "628383bf24daf738f5eb4a48e9d8d2954fa19f86cbac6df254cb3cbcead6988b",
+        "source_viewbox": [
+          0.0,
+          0.0,
+          200.0,
+          200.0
+        ],
+        "mm_per_source_unit": 0.26458333333333334,
+        "normalization_pose": {
+          "tx": -26.606736833089194,
+          "ty": -26.579136024271648,
+          "scale": 0.26458333333333334,
+          "angle_deg": 0.0
+        },
+        "geometry_hash": "6bf0dcdc58beaa4928a2e6892a0a191d9013681d3040abe65bd8d6fa7a3f208d",
+        "trace_settings": {
+          "preset": "exact"
+        },
+        "curve_tolerance_source": 0.1,
+        "canonical_svg": "<svg xmlns=\"http://www.w3.org/2000/svg\" version=\"1.1\" width=\"200\" height=\"200\" viewBox=\"16 16 200 200\" overflow=\"hidden\">\n<path d=\"M160.97266,49.89063C179.06233,68.71225,187.34287,93.69361,186.96143,119.62207C185.87525,144.18924,177.1786,167.90868,159,185C149.94303,192.74177,138.85239,199.02834,127,201C126.60232,201.06703,126.60232,201.06703,124.58984,201.40625C106.03907,203.81047,90.56374,197.19638,75.88672,186.45313C58.10921,172.06012,49.04452,149.04012,46.625,126.875C44.3428,101.56287,50.33733,76.41402,66.25391,56.28955C76.35126,44.21162,90.27018,34.70885,106,32C106.35514,31.93297,106.35514,31.93297,108.15234,31.59375C127.68788,28.73331,146.7245,36.72055,160.97266,49.89063Z\" fill=\"#000000\" />\n</svg>\n"
+      }
+    },
+    "layers": {
+      "layer_88b28fa86cef_0": {
+        "id": "layer_88b28fa86cef_0",
+        "asset_id": "asset_88b28fa86cef",
+        "name": "asset_88b28fa86cef",
+        "parent_id": null,
+        "order": 0,
+        "stack_rank": 0,
+        "pose": {
+          "tx": 100,
+          "ty": 100,
+          "scale": 1.0,
+          "angle_deg": 0
+        },
+        "visible": true,
+        "locked": false,
+        "export_enabled": true,
+        "extrusion_mm": null,
+        "fit": {
+          "target": "canvas",
+          "hole_id": null,
+          "padding_mm": 0,
+          "avoid_siblings": true,
+          "sibling_gap_mm": 2,
+          "auto_scale_while_dragging": false,
+          "allow_rotation": false,
+          "rotation_half_range_deg": 20
+        }
+      },
+      "layer_999d7409d9dd_1": {
+        "id": "layer_999d7409d9dd_1",
+        "asset_id": "asset_999d7409d9dd",
+        "name": "asset_999d7409d9dd",
+        "parent_id": null,
+        "order": 1,
+        "stack_rank": 1,
+        "pose": {
+          "tx": 100,
+          "ty": 100,
+          "scale": 1.0,
+          "angle_deg": 0
+        },
+        "visible": true,
+        "locked": false,
+        "export_enabled": true,
+        "extrusion_mm": null,
+        "fit": {
+          "target": "canvas",
+          "hole_id": null,
+          "padding_mm": 0,
+          "avoid_siblings": true,
+          "sibling_gap_mm": 2,
+          "auto_scale_while_dragging": false,
+          "allow_rotation": false,
+          "rotation_half_range_deg": 20
+        }
+      },
+      "layer_bb0e18e5df26_2": {
+        "id": "layer_bb0e18e5df26_2",
+        "asset_id": "asset_bb0e18e5df26",
+        "name": "asset_bb0e18e5df26",
+        "parent_id": null,
+        "order": 2,
+        "stack_rank": 2,
+        "pose": {
+          "tx": 100,
+          "ty": 100,
+          "scale": 1.0,
+          "angle_deg": 0
+        },
+        "visible": true,
+        "locked": false,
+        "export_enabled": true,
+        "extrusion_mm": null,
+        "fit": {
+          "target": "canvas",
+          "hole_id": null,
+          "padding_mm": 0,
+          "avoid_siblings": true,
+          "sibling_gap_mm": 2,
+          "auto_scale_while_dragging": false,
+          "allow_rotation": false,
+          "rotation_half_range_deg": 20
+        }
+      },
+      "layer_8136d4ccbf06_0": {
+        "id": "layer_8136d4ccbf06_0",
+        "asset_id": "asset_88b28fa86cef",
+        "name": "asset_8136d4ccbf06",
+        "parent_id": null,
+        "order": 3,
+        "stack_rank": 3,
+        "pose": {
+          "tx": 100,
+          "ty": 100,
+          "scale": 1.0,
+          "angle_deg": 0
+        },
+        "visible": true,
+        "locked": false,
+        "export_enabled": true,
+        "extrusion_mm": null,
+        "fit": {
+          "target": "canvas",
+          "hole_id": null,
+          "padding_mm": 0,
+          "avoid_siblings": true,
+          "sibling_gap_mm": 2,
+          "auto_scale_while_dragging": false,
+          "allow_rotation": false,
+          "rotation_half_range_deg": 20
+        }
+      },
+      "layer_8569a7e6b5a0_1": {
+        "id": "layer_8569a7e6b5a0_1",
+        "asset_id": "asset_999d7409d9dd",
+        "name": "asset_8569a7e6b5a0",
+        "parent_id": null,
+        "order": 4,
+        "stack_rank": 4,
+        "pose": {
+          "tx": 100,
+          "ty": 100,
+          "scale": 1.0,
+          "angle_deg": 0
+        },
+        "visible": true,
+        "locked": false,
+        "export_enabled": true,
+        "extrusion_mm": null,
+        "fit": {
+          "target": "canvas",
+          "hole_id": null,
+          "padding_mm": 0,
+          "avoid_siblings": true,
+          "sibling_gap_mm": 2,
+          "auto_scale_while_dragging": false,
+          "allow_rotation": false,
+          "rotation_half_range_deg": 20
+        }
+      },
+      "layer_5aa9cd153ff7_2": {
+        "id": "layer_5aa9cd153ff7_2",
+        "asset_id": "asset_bb0e18e5df26",
+        "name": "asset_5aa9cd153ff7",
+        "parent_id": null,
+        "order": 5,
+        "stack_rank": 5,
+        "pose": {
+          "tx": 100,
+          "ty": 100,
+          "scale": 1.0,
+          "angle_deg": 0
+        },
+        "visible": true,
+        "locked": false,
+        "export_enabled": true,
+        "extrusion_mm": null,
+        "fit": {
+          "target": "canvas",
+          "hole_id": null,
+          "padding_mm": 0,
+          "avoid_siblings": true,
+          "sibling_gap_mm": 2,
+          "auto_scale_while_dragging": false,
+          "allow_rotation": false,
+          "rotation_half_range_deg": 20
+        }
+      }
+    }
+  },
+  "command_results": {
+    "import_doc_457ef06ca14c_1ff6daed": {
+      "type": "add_layers",
+      "status": "committed",
+      "revision": 1
+    },
+    "import_doc_457ef06ca14c_faf4e83e": {
+      "type": "add_layers",
+      "status": "committed",
+      "revision": 2
+    }
+  }
+}

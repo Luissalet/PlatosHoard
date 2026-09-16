@@ -1,0 +1,18 @@
+{
+  "task": "02_contratos",
+  "date": "2026-09-15",
+  "commit": "ccccfb973837ff5992d58a3bc0edc7446a4caaf2",
+  "changed_files": [
+    "schemas/project.schema.json",
+    "schemas/fit-request.schema.json",
+    "schemas/export-request.schema.json",
+    "silhouettes/editor/__init__.py",
+    "silhouettes/editor/models.py",
+    "tests/editor/test_models.py"
+  ],
+  "executed_checks": [
+    "python -m pytest tests/editor/test_models.py -q: 27 passed in 1.71s",
+    "python -m pytest tests/ -q: 97 passed, 1 failed (pre-existing star iou 0.9755 < 0.98, not lowered)"
+  ],
+  "notes": "Tres schemas copiados del paquete y validados con Draft202012Validator.check_schema. new_document con defaults 200x200 mm, padding 5, espesor 3, gap 0, revision 0. validate_document: schema + IDs=claves, assets/padres existentes, sin ciclos, orden unico entre hermanos, padding < canvas, sin booleanos como numeros ni NaN/Inf. Fixture de tres capas valida sin modificaciones. parent_id es la unica relacion; no se persiste children[]. Siguiente tarea: 03_store."
+}

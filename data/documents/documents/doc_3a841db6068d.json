@@ -1,0 +1,94 @@
+{
+  "envelope_version": 1,
+  "document": {
+    "schema_version": 2,
+    "id": "doc_3a841db6068d",
+    "name": "diag",
+    "revision": 1,
+    "units": "mm",
+    "canvas": {
+      "width_mm": 200.0,
+      "height_mm": 200.0,
+      "padding_mm": {
+        "top": 5.0,
+        "right": 5.0,
+        "bottom": 5.0,
+        "left": 5.0
+      }
+    },
+    "default_extrusion_mm": 3.0,
+    "stack_gap_mm": 0.0,
+    "assets": {
+      "asset_811be00d1a60": {
+        "id": "asset_811be00d1a60",
+        "name": "asset_811be00d1a60",
+        "source_type": "png",
+        "source_uri": "assets/asset_811be00d1a60/source.png",
+        "canonical_svg_uri": "assets/asset_811be00d1a60/canonical.svg",
+        "source_sha256": "8d4f60f3a909a12a555c095c8d7baa30f465c4b07fbf79ba82f686fbb96f3f20",
+        "source_viewbox": [
+          0.0,
+          0.0,
+          64.0,
+          64.0
+        ],
+        "mm_per_source_unit": 0.26458333333333334,
+        "normalization_pose": {
+          "tx": -8.466666666666667,
+          "ty": -8.466666666666667,
+          "scale": 0.26458333333333334,
+          "angle_deg": 0.0
+        },
+        "geometry_hash": "1010b83c1917b73503381f3a0db4d2b17e30c70bb459bea6453c51b2595f7ffe",
+        "trace_settings": {
+          "preset": "exact"
+        },
+        "curve_tolerance_source": 0.1,
+        "local_bounds": [
+          -8.466666666666667,
+          -8.466666666666667,
+          8.466666666666667,
+          8.466666666666667
+        ],
+        "canonical_svg": "<svg xmlns=\"http://www.w3.org/2000/svg\" version=\"1.1\" width=\"64\" height=\"64\" viewBox=\"16 16 64 64\" overflow=\"hidden\">\n<path d=\"M16,80C16,58.66667,16,37.33333,16,16C37.33333,16,58.66667,16,80,16C80,37.33333,80,58.66667,80,80C58.66667,80,37.33333,80,16,80Z\" fill=\"#000000\" />\n</svg>\n"
+      }
+    },
+    "layers": {
+      "layer_811be00d1a60_0": {
+        "id": "layer_811be00d1a60_0",
+        "asset_id": "asset_811be00d1a60",
+        "name": "asset_811be00d1a60",
+        "parent_id": null,
+        "order": 0,
+        "stack_rank": 0,
+        "pose": {
+          "tx": 100,
+          "ty": 100,
+          "scale": 1.0,
+          "angle_deg": 0
+        },
+        "visible": true,
+        "locked": false,
+        "export_enabled": true,
+        "extrusion_mm": null,
+        "fit": {
+          "target": "canvas",
+          "hole_id": null,
+          "padding_mm": 0,
+          "avoid_siblings": true,
+          "sibling_gap_mm": 2,
+          "auto_scale_while_dragging": false,
+          "allow_rotation": false,
+          "rotation_half_range_deg": 20
+        }
+      }
+    }
+  },
+  "command_results": {
+    "import_doc_3a841db6068d_b6cc133f": {
+      "type": "add_layers",
+      "status": "committed",
+      "revision": 1
+    }
+  }
+}

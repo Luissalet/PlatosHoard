@@ -1,0 +1,105 @@
+{
+  "envelope_version": 1,
+  "document": {
+    "schema_version": 2,
+    "id": "doc_1a13425245cc",
+    "name": "Nuevo documento",
+    "revision": 3,
+    "units": "mm",
+    "canvas": {
+      "width_mm": 200.0,
+      "height_mm": 200.0,
+      "padding_mm": {
+        "top": 5.0,
+        "right": 5.0,
+        "bottom": 5.0,
+        "left": 5.0
+      }
+    },
+    "default_extrusion_mm": 3.0,
+    "stack_gap_mm": 0.0,
+    "assets": {
+      "asset_7c4a36b15beb": {
+        "id": "asset_7c4a36b15beb",
+        "name": "mountain",
+        "source_filename": "mountain.png",
+        "source_type": "png",
+        "source_uri": "assets/asset_7c4a36b15beb/source.png",
+        "canonical_svg_uri": "assets/asset_7c4a36b15beb/canonical.svg",
+        "source_sha256": "8f895885f3e32e3e064620f2c15bb1719d6bcba5c0472fcc3c04f2c224237d4a",
+        "source_viewbox": [
+          0.0,
+          0.0,
+          120.0,
+          120.0
+        ],
+        "mm_per_source_unit": 0.26458333333333334,
+        "normalization_pose": {
+          "tx": -16.001775835388184,
+          "ty": -16.024794321192424,
+          "scale": 0.26458333333333334,
+          "angle_deg": 0.0
+        },
+        "geometry_hash": "55ec2849e5cd9d78c7c67c945f4b6eeb39a549811540a77e036fc9a33c1a8ec7",
+        "trace_settings": {
+          "preset": "exact"
+        },
+        "curve_tolerance_source": 0.1,
+        "local_bounds": [
+          -10.809327918721518,
+          -10.79837561630758,
+          10.809327918721518,
+          10.798375616307577
+        ],
+        "canonical_svg": "<svg xmlns=\"http://www.w3.org/2000/svg\" version=\"1.1\" width=\"120\" height=\"120\" viewBox=\"16 16 120 120\" overflow=\"hidden\">\n<path d=\"M47,105C38.88895,96.04468,35.16555,85.25835,35.625,73.22656C36.9302,61.99644,41.93168,52.49623,50.32031,44.89844C64.69925,34.03332,82.30179,32.70063,97.94922,41.69531C108.28347,48.66001,114.42888,57.7834,117,70C118.49558,82.75095,115.12116,93.45487,107.25781,103.52344C99.9226,111.56933,90.56188,116.11306,79.76953,117.37891C66.96854,117.85302,56.43757,113.60397,47,105Z\" fill=\"#000000\" />\n</svg>\n"
+      }
+    },
+    "layers": {
+      "layer_7c4a36b15beb_0": {
+        "id": "layer_7c4a36b15beb_0",
+        "asset_id": "asset_7c4a36b15beb",
+        "name": "renamed_layer",
+        "parent_id": null,
+        "order": 0,
+        "stack_rank": 0,
+        "pose": {
+          "tx": 100.0,
+          "ty": 100.0,
+          "scale": 8.788705524925568,
+          "angle_deg": 0
+        },
+        "visible": true,
+        "locked": true,
+        "export_enabled": true,
+        "extrusion_mm": null,
+        "fit": {
+          "target": "canvas",
+          "hole_id": null,
+          "padding_mm": 0,
+          "avoid_siblings": true,
+          "sibling_gap_mm": 2,
+          "auto_scale_while_dragging": false,
+          "allow_rotation": false,
+          "rotation_half_range_deg": 20
+        }
+      }
+    }
+  },
+  "command_results": {
+    "import_doc_1a13425245cc_91181fa9": {
+      "type": "add_layers",
+      "status": "committed",
+      "revision": 1
+    },
+    "t_rename": {
+      "type": "set_layer_properties",
+      "status": "committed",
+      "revision": 2
+    },
+    "t_lock": {
+      "type": "set_layer_properties",
+      "status": "committed",
+      "revision": 3
+    }
+  }
+}

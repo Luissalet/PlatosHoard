@@ -1,0 +1,16 @@
+{
+  "task": "24",
+  "title": "Undo/redo con restore_snapshot (spec §13.4)",
+  "captured_at": "2026-09-16T11:55:00Z",
+  "checks": [
+    "python -m pytest tests/editor/test_store.py -q: 15 passed in 4.76s (incl. 2 new restore_snapshot tests)",
+    "node --check static/editor/store.js static/editor/editor.js: OK",
+    "python -m pytest tests/ -q: 234 passed, 1 failed (pre-existing star iou 0.9755<0.98, not lowered)"
+  ],
+  "changed_files": [
+    "silhouettes/editor/commands.py",
+    "static/editor/store.js",
+    "static/editor/editor.js",
+    "tests/editor/test_store.py"
+  ]
+}

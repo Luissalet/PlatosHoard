@@ -12,12 +12,45 @@ Then open http://localhost:5000
 import os
 import io
 import base64
-from flask import Flask, request, jsonify, render_template_string
+import mimetypes
+import multiprocessing
+from pathlib import Path
+from flask import Flask, request, jsonify, render_template, render_template_string
+
+# Browsers enforce strict MIME checking for <script type="module">.
+# Flask's default map has no entry for .mjs (served as text/plain), which
+# breaks the editor's ES modules. Register it before the first request.
+mimetypes.add_type("application/javascript", ".mjs")
 
 from pipeline import process_image
+from silhouettes.editor.api import editor_bp, create_editor_app
+from silhouettes.editor.document_store import DocumentStore
+from silhouettes.editor.jobs import JobScheduler
 
 app = Flask(__name__)
+app.config["TEMPLATES_AUTO_RELOAD"] = True
+app.jinja_env.auto_reload = True
 app.config["MAX_CONTENT_LENGTH"] = 16 * 1024 * 1024  # 16 MB upload limit
+
+
+@app.after_request
+def _no_cache_editor_assets(response):
+    # Avoid stale ES modules during local iteration (you restart the server).
+    if request.path.startswith("/static/editor/") or request.path == "/editor":
+        response.headers["Cache-Control"] = "no-store, max-age=0"
+    return response
+
+# Editor v2 wiring (task 04): scheduler created at startup, not import time.
+_DATA_DIR = Path(__file__).parent / "data"
+_DATA_DIR.mkdir(exist_ok=True)
+_JOBS_DIR = _DATA_DIR / "jobs"
+_JOBS_DIR.mkdir(exist_ok=True)
+
+_store = DocumentStore(_DATA_DIR / "documents")
+_scheduler = JobScheduler(output_dir=_JOBS_DIR)
+app.extensions["editor_store"] = _store
+app.extensions["job_scheduler"] = _scheduler
+app.register_blueprint(editor_bp)
 
 
 HTML_TEMPLATE = """
@@ -697,6 +730,11 @@ def index():
     return render_template_string(HTML_TEMPLATE)
 
 
+@app.route("/editor")
+def editor():
+    return render_template("editor.html")
+
+
 @app.route("/api/process", methods=["POST"])
 def api_process():
     """Process an uploaded PNG through the full pipeline."""
@@ -735,4 +773,7 @@ def api_process():
 
 
 if __name__ == "__main__":
-    app.run(host="0.0.0.0", port=5000, debug=True)
+    multiprocessing.freeze_support()
+    # Reloader disabled: it would spawn a second process and duplicate the
+    # job worker pool (spec §13.2).  Use debug=False in production.
+    app.run(host="0.0.0.0", port=5000, debug=False, use_reloader=False)

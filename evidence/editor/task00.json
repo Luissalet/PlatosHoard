@@ -1,0 +1,12 @@
+{
+  "task": "00_baseline",
+  "date": "2026-09-14",
+  "commit": "ccccfb973837ff5992d58a3bc0edc7446a4caaf2",
+  "dirty_files": [
+    "tests/test_pipeline.py"
+  ],
+  "python": "3.13.7 (tags/v3.13.7:bcee1c3, Aug 14 2025, 14:15:11) [MSC v.1944 64 bit (AMD64)]",
+  "gate_tests": "5 passed in 1.35s",
+  "full_suite": "59 passed, 1 failed (pre-existing star iou)",
+  "notes": "Motor funcional. Fallo star preexistente (iou 0.9755 < 0.98). No se baja umbral."
+}

@@ -1,0 +1,459 @@
+:root {
+  --bg: #0f1115;
+  --panel: #1a1d24;
+  --panel-2: #20242d;
+  --border: #2a2e38;
+  --text: #e4e6eb;
+  --muted: #8b8f9a;
+  --accent: #4f8cff;
+  --danger: #ff6b6b;
+  --ok: #4caf50;
+}
+
+* { box-sizing: border-box; }
+html, body { height: 100%; }
+body.editor-shell {
+  margin: 0;
+  background: var(--bg);
+  color: var(--text);
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+  overflow: hidden;
+}
+
+.editor-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  min-height: 52px;
+  padding: 8px 12px;
+  border-bottom: 1px solid var(--border);
+  background: var(--panel);
+}
+
+.toolbar-group {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.canvas-controls label {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  color: var(--muted);
+  font-size: 0.8rem;
+}
+
+input, select, button {
+  font: inherit;
+  color: var(--text);
+  background: var(--panel-2);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+}
+
+input[type="number"] {
+  width: 72px;
+  padding: 5px 6px;
+}
+
+button, .link {
+  cursor: pointer;
+  text-decoration: none;
+  padding: 6px 10px;
+  border-radius: 6px;
+}
+
+button {
+  background: var(--accent);
+  border-color: transparent;
+  color: white;
+}
+
+button:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+.link {
+  color: var(--accent);
+  background: transparent;
+  border: 1px solid transparent;
+}
+
+.file-label {
+  position: relative;
+  overflow: hidden;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 10px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  color: var(--muted);
+  font-size: 0.85rem;
+}
+
+.file-label input[type="file"] {
+  position: absolute;
+  inset: 0;
+  opacity: 0;
+  cursor: pointer;
+}
+
+.editor-main {
+  display: grid;
+  grid-template-columns: var(--panel-left, 300px) minmax(0, 1fr) var(--panel-right, 340px);
+  gap: 12px;
+  height: calc(100vh - 52px);
+  padding: 12px;
+}
+
+/* Resizable side panels: drag the thin handle at the panel's inner edge */
+.panel-resizer {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  width: 8px;
+  cursor: col-resize;
+  z-index: 5;
+  background: transparent;
+}
+.panel-resizer:hover,
+.panel-resizer:active {
+  background: var(--accent);
+  opacity: 0.55;
+}
+.panel-resizer-left {
+  right: -4px;
+}
+.panel-resizer-right {
+  left: -4px;
+}
+.editor-left, .editor-right {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  min-height: 0;
+  overflow: auto;
+}
+
+.hint {
+  margin: 0 0 8px;
+  color: var(--muted);
+  font-size: 0.72rem;
+  line-height: 1.35;
+}
+
+.tree-swatch {
+  flex: none;
+  width: 10px;
+  height: 10px;
+  border-radius: 2px;
+  border: 1px solid rgba(255,255,255,0.25);
+}
+.tree-row.dragging { opacity: 0.45; }
+.tree-row.drop-into {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
+  background: rgba(79, 140, 255, 0.15);
+}
+.tree-row.drop-before {
+  box-shadow: inset 0 2px 0 0 var(--ok);
+}
+.tree-row.drop-after {
+  box-shadow: inset 0 -2px 0 0 var(--ok);
+}
+
+.insp-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin: 6px 0;
+  font-size: 0.82rem;
+  color: var(--muted);
+}
+.insp-row input, .insp-row select {
+  width: 120px;
+  padding: 4px 6px;
+}
+.insp-row.checkbox-row {
+  justify-content: flex-start;
+}
+#inspector h3 {
+  margin: 14px 0 6px;
+  font-size: 0.78rem;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--muted);
+}
+.insp-error {
+  color: var(--danger);
+  font-size: 0.8rem;
+}
+
+/* Drop highlight for drag-and-drop import */
+.editor-main.drop-active {
+  outline: 3px dashed var(--accent);
+  outline-offset: -6px;
+}
+
+/* Layer tree row buttons */
+.tree-row {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 3px 4px;
+  border-radius: 6px;
+}
+.tree-row:hover {
+  background: var(--panel-2);
+}
+.tree-row.selected {
+  background: rgba(79, 140, 255, 0.18);
+}
+.tree-thumb {
+  flex: none;
+  width: 28px;
+  height: 28px;
+  background: #ffffff;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  color: #374151;
+  overflow: hidden;
+}
+.tree-row .tree-name {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 0.85rem;
+}
+.eye-btn, .del-btn {
+  padding: 1px 5px;
+  font-size: 0.75rem;
+  line-height: 1.4;
+  background: var(--panel-2);
+  border: 1px solid var(--border);
+  color: var(--text);
+  flex: none;
+}
+.del-btn {
+  color: var(--danger);
+}
+.del-btn:hover {
+  background: var(--danger);
+  color: white;
+}
+
+.editor-center {
+  min-width: 0;
+  min-height: 0;
+  background: #2a2e38; /* neutral backdrop so the canvas reads as an object */
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  overflow: hidden;
+}
+
+.panel {
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 12px;
+}
+
+.panel h2 {
+  margin: 0 0 10px;
+  font-size: 0.85rem;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--muted);
+}
+
+.empty-state {
+  margin: 0;
+  color: var(--muted);
+  font-size: 0.85rem;
+  line-height: 1.4;
+}
+
+.button-row {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin-top: 8px;
+}
+
+.toolbar-group.view-toolbar {
+  gap: 14px;
+  padding: 6px 12px;
+  background: #243044;
+  border: 1px solid var(--accent);
+  border-radius: 8px;
+}
+.tb-check {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  color: #fff;
+  font-size: 0.85rem;
+  font-weight: 600;
+  cursor: pointer;
+  user-select: none;
+  white-space: nowrap;
+}
+.tb-check input {
+  width: 15px;
+  height: 15px;
+  accent-color: var(--accent);
+  flex: none;
+}
+
+.panel-vista {
+  border-color: var(--accent);
+}
+.vista-list {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.vista-row {
+  display: grid;
+  grid-template-columns: 18px minmax(0, 1fr);
+  grid-template-rows: auto auto;
+  column-gap: 10px;
+  row-gap: 1px;
+  align-items: start;
+  margin: 0;
+  padding: 7px 8px;
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: 6px;
+  cursor: pointer;
+  color: var(--text);
+}
+.vista-row:hover {
+  background: var(--panel-2);
+  border-color: var(--border);
+}
+.vista-row:has(input:checked) {
+  background: color-mix(in srgb, var(--accent) 12%, transparent);
+  border-color: color-mix(in srgb, var(--accent) 35%, var(--border));
+}
+.vista-row input {
+  grid-column: 1;
+  grid-row: 1 / span 2;
+  width: 15px;
+  height: 15px;
+  margin: 2px 0 0;
+  accent-color: var(--accent);
+  align-self: start;
+}
+.vista-title {
+  grid-column: 2;
+  grid-row: 1;
+  font-size: 0.84rem;
+  font-weight: 650;
+  color: var(--text);
+  line-height: 1.25;
+}
+.vista-row:has(input:checked) .vista-title {
+  color: var(--accent);
+}
+.vista-desc {
+  grid-column: 2;
+  grid-row: 2;
+  font-size: 0.72rem;
+  color: var(--muted);
+  line-height: 1.25;
+}
+
+.fit-status {
+  margin-top: 10px;
+  min-height: 20px;
+  color: var(--muted);
+  font-size: 0.8rem;
+}
+
+#editor-svg {
+  width: 100%;
+  height: 100%;
+  display: block;
+  background: transparent;
+}
+
+/* The canvas outer rect is the physical sheet: solid white, exact size. */
+#canvas-guides .canvas-outer {
+  fill: #ffffff;
+  stroke: #111827;
+  stroke-width: 1.25;
+  vector-effect: non-scaling-stroke;
+}
+/* The inner usable area is only a subtle dashed margin guide. */
+#canvas-guides .canvas-inner {
+  fill: none;
+  stroke: #94a3b8;
+  stroke-width: 0.8;
+  stroke-dasharray: 3 3;
+  vector-effect: non-scaling-stroke;
+}
+
+.layer {
+  opacity: 0.88;
+}
+
+.viewer-panel {
+  flex: 1 1 auto;
+  display: flex;
+  flex-direction: column;
+  min-height: 280px;
+  min-width: 0;
+}
+
+.viewer-3d,
+.viewer-3d-host {
+  position: relative;
+  flex: 1 1 auto;
+  width: 100%;
+  min-width: 0;
+  min-height: 240px;
+  height: 280px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: #1f2937;
+  overflow: hidden;
+}
+
+.viewer-3d-canvas {
+  position: absolute !important;
+  inset: 0;
+  width: 100% !important;
+  height: 100% !important;
+  display: block;
+  touch-action: none;
+}
+
+.errors-panel .empty-state {
+  color: var(--muted);
+}
+
+@media (max-width: 1100px) {
+  .editor-main {
+    grid-template-columns: 260px minmax(0, 1fr);
+    grid-template-rows: minmax(0, 1fr) 320px;
+  }
+  .editor-right {
+    grid-column: 1 / -1;
+    flex-direction: row;
+    overflow: auto;
+  }
+  .editor-right .panel {
+    min-width: 260px;
+    flex: 1;
+  }
+}

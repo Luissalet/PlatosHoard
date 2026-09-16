@@ -1,0 +1,18 @@
+{
+  "task": "01_separacion",
+  "date": "2026-09-14",
+  "commit": "ccccfb973837ff5992d58a3bc0edc7446a4caaf2",
+  "changed_files": [
+    "app.py",
+    "templates/editor.html",
+    "static/editor/editor.js",
+    "static/editor/editor.css",
+    "tests/editor/test_routes.py"
+  ],
+  "executed_checks": [
+    "python -m pytest tests/editor/test_routes.py -q: 6 passed in 1.41s",
+    "python -m pytest tests/editor/test_legacy_gate.py tests/editor/test_routes.py -q: 11 passed in 1.43s",
+    "python -m pytest tests/ -q: 70 passed, 1 failed (pre-existing star iou 0.9755 < 0.98)"
+  ],
+  "notes": "GET /editor responde 200 con IDs obligatorios y sin duplicados. La vista antigua sigue en / y /api/process conserva su contrato. El fallo star es preexistente y no se ha rebajado."
+}

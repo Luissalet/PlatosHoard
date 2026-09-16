@@ -1,0 +1,33 @@
+{
+  "task": "06_transformaciones",
+  "date": "2026-09-15",
+  "files_created": [
+    "silhouettes/editor/transforms.py",
+    "static/editor/affine.mjs",
+    "tests/editor/test_transforms.py",
+    "tests/editor/test_affine.mjs"
+  ],
+  "files_modified": [],
+  "tests": {
+    "python": "python -m pytest tests/editor/test_transforms.py -q: 36 passed in 1.55s",
+    "js": "node --test tests/editor/test_affine.mjs: 11 passed, 0 failed",
+    "full_suite": "188 passed, 1 failed (pre-existing star IoU 0.9755 < 0.98, not lowered)"
+  },
+  "gates_verified": [
+    "Pose rejects bool, NaN, Infinity, zero/negative scale (INVALID_NUMBER)",
+    "Pose.from_matrix rejects shear, reflection, zero scale (INVALID_TRANSFORM)",
+    "Pose.matrix()/from_matrix() round-trip for 4 parameter sets",
+    "compose_pose: parent 2x at 90deg maps child (1,0) to (0,2) correctly",
+    "reparent_pose: preserves world position of node AND grandchild (1e-9 tolerance)",
+    "apply_pose: Shapely [a,c,b,d,e,f] order handled explicitly; area preserved under rotation; scales with scale^2",
+    "normalize_asset: centres bounds at origin (tx=-cx*k, ty=-cy*k); rejects empty geometry",
+    "world_pose: walks parent chain A->B->C correctly; rejects unknown ID, cycles",
+    "set_world_center: layer centre lands at requested world point (identity and rotated parent)",
+    "set_world_scale: anchor stays fixed when scale changes (1e-9 tolerance)",
+    "set_world_angle: anchor stays fixed when angle changes (1e-9 tolerance)",
+    "PNG resolution change does not alter any mm pose value (unit independence)",
+    "extrusion (Z) is independent of XY scale (matrix Z row/col is identity)",
+    "JS affine.mjs: matrix/inverse/multiply/point/dragPose/scaleOppositeFixed all pass (11 tests)"
+  ],
+  "notes": "transforms.py is the single source of truth for pose arithmetic in the backend. affine.mjs is the matching frontend helper. Both use the same Y-down, positive-clockwise convention. The Shapely [a,c,b,d,e,f] vs SVG [a,b,c,d,e,f] order difference is handled explicitly in apply_pose."
+}

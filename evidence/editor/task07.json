@@ -1,0 +1,44 @@
+{
+  "task": "07_canvas",
+  "date": "2026-09-16",
+  "files_created": [
+    "tests/editor/test_selection.mjs"
+  ],
+  "files_modified": [
+    "static/editor/viewport2d.js",
+    "static/editor/layer_tree.js",
+    "static/editor/inspector.js",
+    "silhouettes/editor/api.py",
+    "silhouettes/editor/asset_adapter.py",
+    "schemas/project.schema.json"
+  ],
+  "tests": {
+    "js": "node --test tests/editor/test_selection.mjs: 10 passed, 0 failed",
+    "python_editor": "python -m pytest tests/editor/ -q: 173 passed in 19.45s",
+    "full_suite": "python -m pytest tests/ -q: 232 passed, 1 failed (pre-existing star IoU 0.9755 < 0.98, not lowered)"
+  },
+  "gates_verified": [
+    "Three-layer fixture renders one <g> per layer in parent-before-children order (A, B, C)",
+    "World matrix includes normalization_pose: A spans [-60,100] with scale 1.6 (verified corner-to-corner)",
+    "Nested chain B = A·B·N_b: B spans [4,100] inside A (verified corner-to-corner)",
+    "Hiding parent A hides the whole subtree (A, B, C all removed from viewport)",
+    "Overlays (canvas-guides, selection-handles) carry data-export=false; no background rect injected into layer groups",
+    "pick(): point inside A only selects A; point outside all layers selects null",
+    "pick(): topmost layer wins (C over B over A at shared centre)",
+    "pick(): hidden layer is not selectable",
+    "pointInLayer respects scale: A spans [-60,100] in world, edge and just-outside cases verified",
+    "Selection outline uses local_bounds (not raw source_viewbox): A outline is [-60,100]²"
+  ],
+  "bugs_fixed": [
+    "viewport2d.js: world matrix omitted normalization_pose (spec §5.3) — layers rendered at wrong positions",
+    "viewport2d.js: pick() had dead code (document.elementFromPoint fallback) — replaced with isPointInFill + local-bounds fallback",
+    "viewport2d.js: selection outline treated local_bounds as [x,y,w,h] instead of [x0,y0,x1,y1]",
+    "viewport2d.js: overlays lacked data-export=false marker",
+    "layer_tree.js: children appended to this.el (flat list) instead of after parent row — broke tree structure",
+    "inspector.js: width/height used source_viewbox instead of local_bounds (mm)",
+    "api.py: GET /documents endpoint missing (editor.js boot calls it to restore last document)",
+    "asset_adapter.py: to_document_asset() did not include local_bounds for the viewport/inspector",
+    "project.schema.json: local_bounds property not declared in asset schema"
+  ],
+  "notes": "Task 07 is now complete. The 2D viewport renders the three-layer fixture at correct positions and scales, selection works by fill hit-test, overlays are non-exportable, and the layer tree preserves hierarchy. The pre-existing star IoU failure (0.9755 < 0.98) is unchanged and not lowered."
+}

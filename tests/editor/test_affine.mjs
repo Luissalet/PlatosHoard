@@ -1,0 +1,15 @@
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import {matrix,multiply,inverse,point,dragPose,scaleOppositeFixed,acceptPreview,frustum,identity} from '../../static/editor/affine.mjs';
+const near=(a,b)=>assert.ok(Math.abs(a-b)<1e-8,`${a} != ${b}`);
+test('matrix inverse round trip',()=>{const m=matrix({tx:20,ty:10,scale:3,angle_deg:30});const n=multiply(m,inverse(m));n.forEach((x,i)=>near(x,identity()[i]));});
+test('positive angle turns towards +Y',()=>{const p=point(matrix({tx:0,ty:0,scale:1,angle_deg:90}),{x:1,y:0});near(p.x,0);near(p.y,1);});
+test('drag nested in rotated scaled parent',()=>{const m=matrix({tx:20,ty:30,scale:2,angle_deg:90});const r=dragPose({tx:0,ty:0,scale:1,angle_deg:0},m,{x:20,y:30},{x:20,y:50});near(r.tx,10);near(r.ty,0);});
+test('resize fixes the opposite corner',()=>{const start={tx:20,ty:20,scale:1,angle_deg:0};const a={x:-10,y:-10};const r=scaleOppositeFixed(start,identity(),a,{x:10,y:10},{x:50,y:50});near(r.scale,2);assert.deepEqual(point(matrix(r),a),point(matrix(start),a));});
+test('resize never mirrors',()=>{const r=scaleOppositeFixed({tx:0,ty:0,scale:1,angle_deg:0},identity(),{x:-1,y:-1},{x:1,y:1},{x:-5,y:-5});assert.ok(r.scale>0);});
+test('stale revision discarded',()=>assert.equal(acceptPreview({project_revision:2,request_seq:5,layer_id:'A'},{project_revision:3,request_seq:5,layer_id:'A'}),false));
+test('out of order drag discarded',()=>assert.equal(acceptPreview({project_revision:3,request_seq:4,layer_id:'A'},{project_revision:3,request_seq:5,layer_id:'A'}),false));
+test('correct preview accepted',()=>assert.equal(acceptPreview({project_revision:3,request_seq:5,layer_id:'A'},{project_revision:3,request_seq:5,layer_id:'A'}),true));
+test('wide viewport does not stretch the shape',()=>{const f=frustum(200,200,1200,400);near((f.right-f.left)/(f.top-f.bottom),3);assert.ok(f.top-f.bottom>=200);});
+test('tall viewport fits width too',()=>{const f=frustum(200,100,400,1200);near((f.right-f.left)/(f.top-f.bottom),1/3);assert.ok(f.right-f.left>=200);});
+test('zero viewport rejected',()=>assert.throws(()=>frustum(200,100,0,300)));

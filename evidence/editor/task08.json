@@ -1,0 +1,32 @@
+{
+  "task": "08_arrastre",
+  "date": "2026-09-16",
+  "files_created": [
+    "tests/editor/test_gestures.mjs"
+  ],
+  "files_modified": [
+    "static/editor/interactions2d.js"
+  ],
+  "tests": {
+    "js": "node --test tests/editor/test_gestures.mjs: 10 passed, 0 failed",
+    "js_all": "node --test tests/editor/test_selection.mjs tests/editor/test_gestures.mjs tests/editor/test_affine.mjs: 31 passed, 0 failed",
+    "python_editor": "python -m pytest tests/editor/ -q: 173 passed in 15.21s"
+  },
+  "gates_verified": [
+    "100 pointermove events produce exactly ONE committed command (commitCount === 1)",
+    "Escape restores the initial pose exactly, zero commits",
+    "pointercancel restores the initial pose exactly, zero commits",
+    "Pan (left button on empty space) does not modify any layer pose (JSON before === after)",
+    "Middle-button pan does not modify any layer pose",
+    "Space+drag pans even over a layer (gesture.kind === 'pan'), poses unchanged",
+    "Wheel zoom does not modify any layer pose",
+    "Drag with a rotated parent (90 deg) uses the parent frame captured at gesture start; one commit; pose changed",
+    "Undo restores the previous pose after a committed drag; redo restores the dragged pose",
+    "Shortcuts (Ctrl+Z) are ignored when the event target is an input element"
+  ],
+  "implementation_notes": [
+    "interactions2d.js rewritten: pointer capture, initial snapshot, dragPose in the parent frame captured at gesture start (no incremental sums), rAF-batched visual preview, one set_pose on pointerup, Escape/pointercancel restore without commit, remote revision change cancels the gesture, Space+drag and middle-button pan, wheel zoom around the cursor, confirmed-content history (undo/redo, limit 100) with shortcuts suppressed inside inputs",
+    "jsdom lacks getScreenCTM/setPointerCapture/DOMPoint — stubbed in the test harness with an identity CTM (client px == document mm) and a minimal DOMPoint.matrixTransform; this is a test-environment shim, not a product change"
+  ],
+  "notes": "Task 08 gates all pass. The pre-existing star IoU failure (0.9755 < 0.98) is unchanged and not lowered."
+}
