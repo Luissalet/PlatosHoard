@@ -8,6 +8,12 @@ function affineMatrix(p) {
   const s = p.scale * Math.sin(t);
   return [c, s, -s, c, p.tx, p.ty];
 }
+const FLIP_H = [-1, 0, 0, 1, 0, 0];
+function layerAffineMatrix(node) {
+  let m = affineMatrix(node.pose);
+  if (node.flip_h) m = matMul(m, FLIP_H);
+  return m;
+}
 function matMul(A, B) {
   const [a, b, c, d, e, f] = A, [g, h, i, j, k, l] = B;
   return [a * g + c * h, b * g + d * h, a * i + c * j, b * i + d * j, a * k + c * l + e, b * k + d * l + f];
@@ -21,7 +27,7 @@ function _layerWorldMatrix(layerId, asset) {
     seen.add(cur);
     const node = store.layerById(cur);
     if (!node) break;
-    chain.unshift(affineMatrix(node.pose));
+    chain.unshift(layerAffineMatrix(node));
     cur = node.parent_id;
   }
   let m = [1, 0, 0, 1, 0, 0];
@@ -72,22 +78,93 @@ function _stackZNormal(layerId) {
   return z;
 }
 
+function _isFrameFloor(node) {
+  if (!_isFrameLayer(node)) return false;
+  const name = node.name || '';
+  return name.includes('fondo') || name === 'Marco';
+}
+
+function _isFrameWalls(node) {
+  if (!_isFrameLayer(node)) return false;
+  return (node.name || '').includes('paredes');
+}
+
+/** Top of the box floor — content and walls sit here; taller walls do NOT push content. */
+function _fondoTop() {
+  const gap = store.doc?.stack_gap_mm ?? 0.4;
+  let h = 0;
+  for (const l of Object.values(store.doc?.layers || {})) {
+    if (!_effectiveVisible(l) || !_isFrameFloor(l)) continue;
+    h = Math.max(h, _extrusionOf(l));
+  }
+  return h > 0 ? h + gap : 0;
+}
+
 /**
- * Normal: parent below, children above.
- * Inverse: flip — deepest child below, parents progressively above.
+ * Marco fondo at z=0; paredes on the floor (grow in +Z without moving silhouettes).
+ * Content stacks on the floor, ignoring wall height.
+ */
+function _stackZFrame(layerId) {
+  const node = store.layerById(layerId);
+  if (!node) return 0;
+  if (_isFrameWalls(node)) return _fondoTop();
+  return 0; // fondo (and legacy single Marco)
+}
+
+/** Content / silhouette stack starting on top of the floor only. */
+function _stackZContent(layerId) {
+  const gap = store.doc?.stack_gap_mm ?? 0.4;
+  const node = store.layerById(layerId);
+  if (!node) return 0;
+  const base = _fondoTop();
+  if (node.parent_id) {
+    const parent = store.layerById(node.parent_id);
+    if (!parent) return base;
+    const sibs = store.childrenOf(node.parent_id).filter((s) => !_isFrameLayer(s));
+    const idx = Math.max(0, sibs.findIndex((s) => s.id === layerId));
+    return _stackZContent(node.parent_id) + _extrusionOf(parent) + gap + idx * 0.05;
+  }
+  const roots = store.roots()
+    .filter((r) => !_isFrameLayer(r))
+    .slice()
+    .sort((a, b) => (a.stack_rank ?? 0) - (b.stack_rank ?? 0));
+  let z = base;
+  for (const r of roots) {
+    if (r.id === layerId) break;
+    if (!_effectiveVisible(r)) continue;
+    z += _extrusionOf(r) + gap;
+  }
+  return z;
+}
+
+/**
+ * Normal: parent below, children above (on the box floor).
+ * Inverse: flip content only — Marco always stays at the bottom; wall height ignored for content Z.
  */
 function _stackZ(layerId) {
   const node = store.layerById(layerId);
   if (!node) return 0;
-  const normalZ = _stackZNormal(layerId);
+
+  if (_isFrameLayer(node)) return _stackZFrame(layerId);
+
+  const normalZ = _stackZContent(layerId);
   if ((store.viewMode || 'normal') !== 'inverse') return normalZ;
 
-  let maxTop = 0;
+  const base = _fondoTop();
+  let maxRelTop = 0;
   for (const l of Object.values(store.doc?.layers || {})) {
-    if (!_effectiveVisible(l)) continue;
-    maxTop = Math.max(maxTop, _stackZNormal(l.id) + _extrusionOf(l));
+    if (!_effectiveVisible(l) || _isFrameLayer(l)) continue;
+    const rel = Math.max(0, _stackZContent(l.id) - base);
+    maxRelTop = Math.max(maxRelTop, rel + _extrusionOf(l));
   }
-  return Math.max(0, maxTop - normalZ - _extrusionOf(node));
+  const rel = Math.max(0, normalZ - base);
+  return base + Math.max(0, maxRelTop - rel - _extrusionOf(node));
+}
+
+function _isFrameLayer(node) {
+  const name = node?.name || '';
+  return name === 'Marco' || name === 'Marco fondo' || name === 'Marco paredes'
+    || String(node?.id || '').startsWith('layer_marco_');
 }
 
 function _allLayerIds() {
@@ -683,6 +760,14 @@ export function mountViewer3D(container) {
       }
       syncSheetAndGrid();
 
+      // Keep procedural Marco as a normal ring under/around inverse plates.
+      for (const lid of Object.keys(store.doc?.layers || {})) {
+        const n = store.layerById(lid);
+        if (!n || !_effectiveVisible(n) || !_isFrameLayer(n)) continue;
+        const fm = buildLayerMesh(lid);
+        if (fm) assembly.add(fm);
+      }
+
       for (const layerId of targets) {
         const entry = body.layers?.[layerId];
         if (!entry?.rings?.length) continue;
@@ -702,7 +787,22 @@ export function mountViewer3D(container) {
       frameStable();
     } catch (err) {
       console.warn('inverse mesh-rings failed, client fallback', err);
-      if (seq !== _inverseSeq) return;
+      // Always rebuild client inverse for THIS request's targets, even if a
+      // newer request started — otherwise a 404 + race leaves the assembly empty.
+      if (store.viewMode !== 'inverse' || store.revision !== rev) return;
+      while (assembly.children.length) {
+        const ch = assembly.children[0];
+        assembly.remove(ch);
+        ch.geometry?.dispose?.();
+        ch.material?.dispose?.();
+      }
+      syncSheetAndGrid();
+      for (const lid of Object.keys(store.doc?.layers || {})) {
+        const n = store.layerById(lid);
+        if (!n || !_effectiveVisible(n) || !_isFrameLayer(n)) continue;
+        const fm = buildLayerMesh(lid);
+        if (fm) assembly.add(fm);
+      }
       for (const layerId of targets) {
         const mesh = buildInverseMesh(layerId);
         if (mesh) assembly.add(mesh);
@@ -726,7 +826,20 @@ export function mountViewer3D(container) {
     const targets = _allLayerIds();
 
     if (mode === 'inverse') {
-      _loadInverseFromServer(targets);
+      const invTargets = targets.filter((id) => {
+        const n = store.layerById(id);
+        return n && !_isFrameLayer(n);
+      });
+      const frameIds = targets.filter((id) => {
+        const n = store.layerById(id);
+        return n && _effectiveVisible(n) && _isFrameLayer(n);
+      });
+      // Add frame rings immediately; inverse plates load async.
+      for (const layerId of frameIds) {
+        const mesh = buildLayerMesh(layerId);
+        if (mesh) assembly.add(mesh);
+      }
+      _loadInverseFromServer(invTargets);
       return;
     }
 

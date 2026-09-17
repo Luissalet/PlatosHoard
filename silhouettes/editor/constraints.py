@@ -33,7 +33,7 @@ from shapely.geometry import Polygon, MultiPolygon, GeometryCollection, box
 from shapely.geometry.base import BaseGeometry
 from shapely.ops import unary_union
 
-from .transforms import Pose, apply_pose, world_pose
+from .transforms import Pose, apply_flip_h, apply_pose, world_pose
 
 
 # ---------------------------------------------------------------------------
@@ -162,6 +162,8 @@ def _layer_world_geometry(doc: Mapping[str, Any], layer_id: str) -> BaseGeometry
     if geom is None:
         raise ConstraintError("MISSING_GEOMETRY",
                               f"asset {node['asset_id']!r} has no cached geometry")
+    if node.get("flip_h"):
+        geom = apply_flip_h(geom)
     return apply_pose(geom, world_pose(layer_id, layers))
 
 

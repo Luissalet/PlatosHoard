@@ -5,7 +5,21 @@
   <meta name="viewport" content="width=device-width, initial-scale=1"/>
   <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate"/>
   <title>Silhouettes — Editor de capas</title>
-  <link rel="stylesheet" href="/static/editor/editor.css?v=20260316aa"/>
+  <link rel="stylesheet" href="/static/editor/editor.css?v=20260917b"/>
+  <script type="importmap">
+  {
+    "imports": {
+      "/static/editor/store.js": "/static/editor/store.js?v=20260917b",
+      "/static/editor/affine.mjs": "/static/editor/affine.mjs?v=20260917b",
+      "/static/editor/viewport2d.js": "/static/editor/viewport2d.js?v=20260917b",
+      "/static/editor/layer_tree.js": "/static/editor/layer_tree.js?v=20260917b",
+      "/static/editor/inspector.js": "/static/editor/inspector.js?v=20260917b",
+      "/static/editor/interactions2d.js": "/static/editor/interactions2d.js?v=20260917b",
+      "/static/editor/export_dialog.js": "/static/editor/export_dialog.js?v=20260917b",
+      "/static/editor/viewer3d.mjs": "/static/editor/viewer3d.mjs?v=20260917b"
+    }
+  }
+  </script>
 </head>
 <body class="editor-shell">
   <header id="document-toolbar" class="editor-toolbar" role="toolbar" aria-label="Documento">
@@ -24,11 +38,6 @@
       <label>Inf <input id="canvas-padding-bottom" type="number" min="0" step="0.1" value="5" disabled/></label>
       <label>Izq <input id="canvas-padding-left" type="number" min="0" step="0.1" value="5" disabled/></label>
     </div>
-    <div class="toolbar-group view-toolbar" aria-label="Vista">
-      <label class="tb-check"><input id="matrioska-mode" type="checkbox" checked disabled/> Matrioska</label>
-      <label class="tb-check"><input id="view-inverse" type="checkbox" disabled/> Inversa</label>
-      <label class="tb-check"><input id="fit-to-canvas" type="checkbox" disabled/> Fit canvas</label>
-    </div>
     <div class="toolbar-group">
       <label class="file-label">Importar
         <input id="import-files" type="file" multiple accept=".png,.svg,image/png,image/svg+xml" disabled/>
@@ -45,22 +54,38 @@
         <h2>Vista</h2>
         <div class="vista-list">
           <label class="vista-row" title="Como Fit canvas, pero encaja cada hijo al máximo dentro de la silueta padre">
-            <input id="matrioska-mode-side" type="checkbox" checked disabled/>
+            <input id="matrioska-mode" type="checkbox" checked disabled/>
             <span class="vista-title">Matrioska</span>
             <span class="vista-desc">Fit a silueta + hijo encima</span>
           </label>
           <label class="vista-row" title="Plancha con huecos en 2D y 3D">
-            <input id="view-inverse-side" type="checkbox" disabled/>
+            <input id="view-inverse" type="checkbox" disabled/>
             <span class="vista-title">Inversa</span>
             <span class="vista-desc">Plancha con huecos</span>
           </label>
           <label class="vista-row" title="Escala máxima al padding; no permite salir del lienzo">
-            <input id="fit-to-canvas-side" type="checkbox" disabled/>
+            <input id="fit-to-canvas" type="checkbox" disabled/>
             <span class="vista-title">Fit canvas</span>
             <span class="vista-desc">Máximo tamaño / clamping</span>
           </label>
         </div>
         <p class="hint" id="view-mode-hint">Modo: normal</p>
+        <div class="marco-box" aria-label="Marco alrededor de inversa">
+          <div class="marco-title">Marco (caja)</div>
+          <p class="hint">Fondo + 4 paredes iguales. Ancho = grosor en planta; altura = extrusión de las paredes.</p>
+          <label class="insp-row">Ancho pared (mm)
+            <input id="marco-wall-w" type="number" min="0.1" step="0.5" value="12" disabled title="Grosor igual en los 4 lados"/>
+          </label>
+          <label class="insp-row">Altura paredes (mm)
+            <input id="marco-wall-h" type="number" min="0.1" step="0.5" value="12" disabled title="Altura Z de las 4 paredes"/>
+          </label>
+          <label class="insp-row">Padding (mm)
+            <input id="marco-padding" type="number" min="0" step="0.5" value="1" disabled/>
+          </label>
+          <div class="button-row">
+            <button type="button" id="marco-generate" disabled title="Genera o reemplaza la capa Marco">Generar marco</button>
+          </div>
+        </div>
       </section>
 
       <section class="panel">
@@ -83,10 +108,11 @@
       <section class="panel">
         <h2>Exportar</h2>
         <select id="recipe-select" disabled>
-          <option value="batch_all" selected>Lote completo (3 familias)</option>
-          <option value="normal_registered">Normal apilada</option>
-          <option value="inverse_registered">Inversa (huecos)</option>
-          <option value="normal_fullframe">Normal a recuadro</option>
+          <option value="batch_all" selected>Lote completo (4 familias + marco)</option>
+          <option value="normal_registered">Sólida anidada</option>
+          <option value="inverse_registered">Inversa anidada</option>
+          <option value="normal_fullframe">Sólida fit canvas</option>
+          <option value="inverse_fullframe">Inversa fit canvas</option>
         </select>
         <div class="button-row">
           <button type="button" id="export-selected" disabled>Exportar selección</button>
@@ -134,6 +160,6 @@
 
   <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/build/three.min.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/controls/OrbitControls.js"></script>
-  <script type="module" src="/static/editor/editor.js?v=20260316aa"></script>
+  <script type="module" src="/static/editor/editor.js?v=20260917b"></script>
 </body>
 </html>

@@ -37,12 +37,15 @@ from shapely.geometry import Polygon, MultiPolygon, GeometryCollection, box
 from shapely.geometry.base import BaseGeometry
 from shapely.ops import unary_union
 
+from shapely.affinity import translate as shp_translate
+
 from .constraints import (
     canvas_shape, inner_canvas, polygon_parts, material, require_shape,
 )
-from .transforms import Pose, apply_pose, world_pose
+from .transforms import Pose, apply_flip_h, apply_pose, world_pose
 from .fitting import contain_rect
-from .composition import compose_part, _effective_visible
+from .composition import compose_part
+from .frame import is_frame_layer_name
 
 
 # ---------------------------------------------------------------------------
@@ -234,6 +237,39 @@ ALLOWED_FAMILIES = frozenset({
     "inverse_fullframe", "shell_registered",
 })
 
+DEFAULT_BATCH_FAMILIES = (
+    "normal_registered",
+    "inverse_registered",
+    "normal_fullframe",
+    "inverse_fullframe",
+)
+
+
+def _ensure_asset_geometry(asset: Mapping[str, Any], asset_id: str) -> BaseGeometry:
+    """Local-mm geometry centred at origin; rehydrate from canonical SVG if needed.
+
+    Persisted documents strip runtime ``_geometry`` / ``_geometry_local``.
+    Export must parse ``canonical_svg`` the same way as live composition.
+    """
+    geom = asset.get("_geometry_local") or asset.get("_geometry")
+    if geom is not None:
+        return geom
+    svg = asset.get("canonical_svg")
+    if not svg:
+        raise ExportError("MISSING_GEOMETRY", f"asset {asset_id!r} has no geometry")
+    from silhouettes.vector import parse_vector, vector_to_polygons
+    from .transforms import normalize_asset
+    polys = vector_to_polygons(parse_vector(svg))
+    if not polys:
+        raise ExportError("EMPTY_GEOMETRY", f"asset {asset_id!r} has no polygons")
+    raw = unary_union(polys) if len(polys) > 1 else polys[0]
+    k = float(asset.get("mm_per_source_unit") or 1.0)
+    local, _ = normalize_asset(raw, k)
+    # Cache on the live asset dict when mutable (in-memory doc).
+    if isinstance(asset, dict):
+        asset["_geometry_local"] = local
+    return local
+
 
 def build_export_plan(
     layers: Mapping[str, Mapping[str, Any]],
@@ -242,7 +278,7 @@ def build_export_plan(
     width: float,
     height: float,
     padding: Mapping[str, float],
-    families: Sequence[str] = ("normal_registered", "inverse_registered", "normal_fullframe"),
+    families: Sequence[str] = DEFAULT_BATCH_FAMILIES,
     default_extrusion_mm: float = 3.0,
 ) -> list[ExportItem]:
     """N SELECTED LAYERS per family.  No invented 90/95/100 percent sizes.
@@ -250,6 +286,10 @@ def build_export_plan(
     Selection is explicit: the caller resolves visibility and exclusion
     first (``resolve_export_selection``).  All geometry is in document mm;
     plan construction never mutates the document.
+
+    Procedural marco layers (fondo / paredes) are exported once under the
+    ``marco/`` stem as family ``marco``, regardless of requested families —
+    they are intentionally larger than the canvas and skip inverse/fullframe.
     """
     if len(set(selected_ids)) != len(selected_ids):
         raise ExportError("DUPLICATE_SELECTION", "Repeated layer ID")
@@ -268,18 +308,30 @@ def build_export_plan(
         asset = assets.get(node["asset_id"])
         if asset is None:
             raise ExportError("MISSING_ASSET", f"layer {lid!r} references unknown asset")
-        geom = asset.get("_geometry")
-        if geom is None:
-            raise ExportError("MISSING_GEOMETRY", f"asset {node['asset_id']!r} has no geometry")
+        geom = _ensure_asset_geometry(asset, node["asset_id"])
+        if node.get("flip_h"):
+            geom = apply_flip_h(geom)
         shapes[lid] = apply_pose(geom, world_pose(lid, layers))
 
     result: list[ExportItem] = []
     for lid in selected_ids:
         node = layers[lid]
         asset = assets[node["asset_id"]]
-        base_geom = asset["_geometry"]
+        base_geom = _ensure_asset_geometry(asset, node["asset_id"])
+        if node.get("flip_h"):
+            base_geom = apply_flip_h(base_geom)
         h = node.get("extrusion_mm")
         h = _finite(h if h is not None else default_extrusion_mm, "extrusion_mm", positive=True)
+        rank = node.get("stack_rank", 0)
+        slug = f"{rank:02d}_{safe_slug(node.get('name', lid))}_{safe_slug(lid)}"
+
+        # Marco box pieces: one normal cut each, own folder, may sit outside C.
+        if is_frame_layer_name(node.get("name"), lid):
+            pose = world_pose(lid, layers)
+            shape = apply_pose(base_geom, pose)
+            require_shape(shape, f"export {lid}/marco")
+            result.append(ExportItem(f"marco/{slug}", lid, "marco", shape, pose, h))
+            continue
 
         for family in families:
             fullframe = family.endswith("fullframe")
@@ -302,9 +354,22 @@ def build_export_plan(
             out = compose_part(shape, C, mode, children)
             require_shape(out, f"export {lid}/{family}")
 
-            stem = f"{family}/{node.get('stack_rank', 0):02d}_{safe_slug(node.get('name', lid))}_{safe_slug(lid)}"
-            result.append(ExportItem(stem, lid, family, out, pose, h))
+            result.append(ExportItem(f"{family}/{slug}", lid, family, out, pose, h))
     return result
+
+
+def _board_for_item(
+    item: ExportItem,
+    canvas_w: float,
+    canvas_h: float,
+) -> tuple[BaseGeometry, float, float]:
+    """Canvas-sized board for silhouettes; tight positive board for marco."""
+    if item.family != "marco":
+        return item.geometry, canvas_w, canvas_h
+    minx, miny, maxx, maxy = item.geometry.bounds
+    bw = max(maxx - minx, 1e-6)
+    bh = max(maxy - miny, 1e-6)
+    return shp_translate(item.geometry, -minx, -miny), bw, bh
 
 
 # ---------------------------------------------------------------------------
@@ -344,6 +409,7 @@ def pack_bundle(
     buf = io.BytesIO()
     with zipfile.ZipFile(buf, "w", compression=zipfile.ZIP_DEFLATED) as z:
         for item in plan:
+            geom, bw, bh = _board_for_item(item, width_mm, height_mm)
             record: dict[str, Any] = {
                 "layer_id": item.layer_id,
                 "family": item.family,
@@ -354,6 +420,7 @@ def pack_bundle(
                 "expected_volume_mm3": item.geometry.area * item.extrusion_mm,
                 "components": len(polygon_parts(item.geometry)),
                 "holes": sum(len(p.interiors) for p in polygon_parts(item.geometry)),
+                "board_mm": [bw, bh],
                 "files": [],
             }
             for fmt in formats:
@@ -362,11 +429,11 @@ def pack_bundle(
                     raise ExportError("DUPLICATE_FILENAME", name)
                 names.add(name)
                 if fmt == "svg":
-                    data = geometry_svg(item.geometry, width_mm, height_mm).encode("utf-8")
+                    data = geometry_svg(geom, bw, bh).encode("utf-8")
                 elif fmt == "png":
-                    data = geometry_png(item.geometry, width_mm, height_mm, png_width_px)
+                    data = geometry_png(geom, bw, bh, png_width_px)
                 else:
-                    data = stl_exporter(item.geometry, item.extrusion_mm, height_mm)
+                    data = stl_exporter(geom, item.extrusion_mm, bh)
                 z.writestr(name, data)
                 record["files"].append({
                     "path": name,

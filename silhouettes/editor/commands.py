@@ -169,7 +169,8 @@ def cmd_set_canvas(doc: dict, payload: Mapping[str, Any]) -> dict:
 # Whitelist of fields that set_layer_properties may touch.
 # id, asset_id, parent_id, order, stack_rank, pose, revision are NOT here.
 _LAYER_PROPERTY_FIELDS = frozenset(
-    {"name", "visible", "locked", "export_enabled", "extrusion_mm", "fit"}
+    # flip_h: horizontal mirror in local space (inspector checkbox).
+    {"name", "visible", "locked", "export_enabled", "extrusion_mm", "fit", "flip_h"}
 )
 
 
@@ -203,7 +204,7 @@ def cmd_set_layer_properties(doc: dict, payload: Mapping[str, Any]) -> dict:
             if not isinstance(value, str) or not value.strip() or len(value) > 200:
                 raise CommandError("INVALID_STRUCTURE", "name must be 1–200 non-whitespace chars")
             layer["name"] = value.strip()
-        elif key in ("visible", "locked", "export_enabled"):
+        elif key in ("visible", "locked", "export_enabled", "flip_h"):
             if not isinstance(value, bool):
                 raise CommandError("INVALID_STRUCTURE", f"{key} must be a boolean")
             layer[key] = value
@@ -321,6 +322,7 @@ def cmd_add_layers(doc: dict, payload: Mapping[str, Any]) -> dict:
             "visible": True,
             "locked": False,
             "export_enabled": True,
+            "flip_h": bool(spec.get("flip_h", False)),
             "extrusion_mm": None,
             "fit": {
                 "target": "canvas",
@@ -554,6 +556,94 @@ def cmd_apply_fit_result(doc: dict, payload: Mapping[str, Any]) -> dict:
     return doc
 
 
+def cmd_generate_frame(doc: dict, payload: Mapping[str, Any]) -> dict:
+    """Create or replace a box marco: solid floor + wall ring around the canvas.
+
+    Payload:
+        ``padding_mm`` (≥ 0): gap between canvas edge and inner opening
+        ``wall_w_mm`` (> 0): wall thickness in plan, equal on all four sides
+        ``wall_h_mm`` (> 0): height (Z) of the four walls → paredes extrusion
+
+    Layers (bottom → top): ``Marco fondo``, ``Marco paredes``.
+    """
+    from .frame import FRAME_LAYER_NAMES, build_frame_box_assets_and_layers, is_frame_layer_name
+    from .transforms import TransformError
+
+    canvas = doc.get("canvas") or {}
+    try:
+        cw = float(canvas.get("width_mm") or 0)
+        ch = float(canvas.get("height_mm") or 0)
+    except (TypeError, ValueError) as exc:
+        raise CommandError("INVALID_STRUCTURE", "canvas size is invalid") from exc
+    if cw <= 0 or ch <= 0:
+        raise CommandError("INVALID_STRUCTURE", "canvas size must be positive")
+
+    try:
+        wall_w = float(payload.get("wall_w_mm", 12))
+        wall_h = float(payload.get("wall_h_mm", 12))
+        padding = float(payload.get("padding_mm", 1))
+    except (TypeError, ValueError) as exc:
+        raise CommandError("INVALID_STRUCTURE", "frame parameters must be numeric") from exc
+
+    layers = doc.setdefault("layers", {})
+    assets = doc.setdefault("assets", {})
+    remove_ids = [
+        lid for lid, node in list(layers.items())
+        if is_frame_layer_name(node.get("name"), node.get("id"))
+    ]
+    orphan_assets: set[str] = set()
+    for lid in remove_ids:
+        node = layers.pop(lid, None)
+        if node and node.get("asset_id"):
+            orphan_assets.add(node["asset_id"])
+    still_used = {n.get("asset_id") for n in layers.values()}
+    for aid in orphan_assets:
+        a = assets.get(aid) or {}
+        fname = a.get("source_filename") or ""
+        if aid not in still_used and (
+            str(aid).startswith("asset_marco_")
+            or fname in ("marco_frame.svg", "marco_fondo.svg", "marco_paredes.svg")
+            or (a.get("name") or "") in FRAME_LAYER_NAMES
+        ):
+            assets.pop(aid, None)
+
+    try:
+        frame_assets, frame_layers, dims = build_frame_box_assets_and_layers(
+            cw, ch,
+            padding_mm=padding,
+            wall_w_mm=wall_w,
+            wall_h_mm=wall_h,
+        )
+    except TransformError as exc:
+        raise CommandError(exc.code, exc.message, status=422) from exc
+
+    doc = cmd_add_layers(doc, {"assets": frame_assets, "layers": frame_layers})
+    fondo_id = frame_layers[0]["id"]
+    paredes_id = frame_layers[1]["id"]
+    # Vertical = height of all four walls (extrusion of the ring piece).
+    doc["layers"][paredes_id]["extrusion_mm"] = float(dims["wall_h_mm"])
+
+    # Stack: fondo (0), paredes (1), then the rest.
+    others = sorted(
+        (lid for lid in doc["layers"] if lid not in (fondo_id, paredes_id)),
+        key=lambda lid: doc["layers"][lid].get("stack_rank", 0),
+    )
+    cmd_set_stack_order(doc, {"order": [fondo_id, paredes_id] + others})
+    root_ids = [
+        lid for lid, n in doc["layers"].items()
+        if n.get("parent_id") is None
+    ]
+    roots_rest = sorted(
+        (lid for lid in root_ids if lid not in (fondo_id, paredes_id)),
+        key=lambda lid: doc["layers"][lid].get("order", 0),
+    )
+    cmd_reorder_siblings(doc, {
+        "parent_id": None,
+        "order": [fondo_id, paredes_id] + roots_rest,
+    })
+    return doc
+
+
 def cmd_restore_snapshot(doc: dict, payload: Mapping[str, Any]) -> dict:
     """Undo/redo: restore a previously confirmed content snapshot (spec §13.4).
 
@@ -594,6 +684,7 @@ HANDLERS: dict[str, Any] = {
     "delete_subtree": cmd_delete_subtree,
     "duplicate_subtree": cmd_duplicate_subtree,
     "apply_fit_result": cmd_apply_fit_result,
+    "generate_frame": cmd_generate_frame,
     "restore_snapshot": cmd_restore_snapshot,
 }
 

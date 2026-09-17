@@ -8,3 +8,5 @@ _ref
 .playwright-mcp
 .pytest_cache
 node_modules
+data/jobs
+data/documents

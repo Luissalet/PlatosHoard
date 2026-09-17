@@ -153,7 +153,7 @@ export class Interactions2D {
       seen.add(cur);
       const n = store.layerById(cur);
       if (!n) break;
-      chain.unshift(affine.matrix(n.pose));
+      chain.unshift(affine.layerMatrix(n));
       cur = n.parent_id;
     }
     let m = affine.identity();
@@ -234,20 +234,27 @@ export class Interactions2D {
     const parentWorld = this._parentWorldMatrix(layerId);
 
     if (kind === 'scale') {
-      // Opposite corner = local (x0,y0); dragged corner = local (x1,y1)
+      const lbArr = Array.isArray(lb) && lb.length >= 4
+        ? [lb[0], lb[1], lb[2], lb[3]]
+        : [0, 0, 100, 100];
+      // Pick local corners that match the visual TL / BR after flip+pose.
+      const { oppositeLocal, draggedLocal } = affine.scaleHandleLocals(
+        lbArr, node, parentWorld,
+      );
       this._gesture = {
         kind: 'scale',
         layerId,
         startPose: { ...node.pose },
         parentWorld,
-        oppositeLocal: { x: lb[0], y: lb[1] },
-        draggedLocal: { x: lb[2], y: lb[3] },
+        oppositeLocal,
+        draggedLocal,
+        flipH: !!node.flip_h,
         revisionAtStart: store.revision,
       };
     } else if (kind === 'rotate') {
       const centerLocal = { x: (lb[0] + lb[2]) / 2, y: (lb[1] + lb[3]) / 2 };
       const centerWorld = affine.point(
-        affine.multiply(this._parentWorldMatrix(layerId), affine.matrix(node.pose)),
+        affine.multiply(this._parentWorldMatrix(layerId), affine.layerMatrix(node)),
         centerLocal,
       );
       this._gesture = {
@@ -289,10 +296,12 @@ export class Interactions2D {
       try {
         pose = affine.scaleOppositeFixed(
           g.startPose, g.parentWorld, g.oppositeLocal, g.draggedLocal, pt,
+          1e-6, !!g.flipH,
         );
       } catch { /* pointer too close to the fixed corner */ }
     } else if (g.kind === 'rotate') {
-      const worldM = affine.multiply(g.parentWorld, affine.matrix(g.startPose));
+      const node = store.layerById(g.layerId);
+      const worldM = affine.multiply(g.parentWorld, affine.layerMatrix({ ...node, pose: g.startPose }));
       const centerWorld = affine.point(worldM, g.centerLocal);
       const ang = Math.atan2(pt.y - centerWorld.y, pt.x - centerWorld.x) * 180 / Math.PI;
       pose = { ...g.startPose, angle_deg: g.startPose.angle_deg + (ang - g.startAngle) };
@@ -330,7 +339,10 @@ export class Interactions2D {
           const v = parseFloat(padMmEl?.value);
           padding = Number.isFinite(v) && v >= 0 ? v : 0;
         }
-        return affine.clampPoseInsideSilhouette(asset, pAsset, pose, padding);
+        return affine.clampPoseInsideSilhouette(asset, pAsset, pose, padding, {
+          flipChild: !!node.flip_h,
+          flipParent: !!parent.flip_h,
+        });
       }
     } catch {
       return pose;
@@ -350,8 +362,9 @@ export class Interactions2D {
       const el = this.viewport._layerEls.get(p.layerId);
       if (!el) return;
       const asset = store.assetById(store.layerById(p.layerId)?.asset_id);
+      const node = store.layerById(p.layerId);
       const parentM = this._parentWorldMatrix(p.layerId);
-      let world = affine.multiply(parentM, affine.matrix(p.pose));
+      let world = affine.multiply(parentM, affine.layerMatrix({ ...node, pose: p.pose }));
       // Paths live in source SVG units; include N + viewBox correction.
       if (asset) {
         world = affine.multiply(world, affine.pathToLocalMatrix(asset));

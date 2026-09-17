@@ -167,6 +167,12 @@ def reparent_pose(old_world: Pose, new_parent_world: Pose) -> Pose:
 # Geometry application
 # ---------------------------------------------------------------------------
 
+def apply_flip_h(geometry: BaseGeometry) -> BaseGeometry:
+    """Reflect geometry through the local Y axis (x → −x). Centred assets stay centred."""
+    from shapely.affinity import affine_transform
+    return affine_transform(geometry, [-1.0, 0.0, 0.0, 1.0, 0.0, 0.0])
+
+
 def apply_pose(geometry: BaseGeometry, pose: Pose) -> BaseGeometry:
     """Apply a pose to a Shapely geometry.
 

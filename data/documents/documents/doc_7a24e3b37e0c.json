@@ -4,7 +4,7 @@
     "schema_version": 2,
     "id": "doc_7a24e3b37e0c",
     "name": "Nuevo documento",
-    "revision": 103,
+    "revision": 186,
     "units": "mm",
     "canvas": {
       "width_mm": 200.0,
@@ -120,6 +120,346 @@
         "trace_settings": {
           "preset": "exact"
         }
+      },
+      "asset_marco_99550c58fc66": {
+        "canonical_svg": "<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"226mm\" height=\"226mm\" viewBox=\"0 0 226 226\"><path fill-rule=\"evenodd\" d=\"M0,0 H226 V226 H0 Z M10,10 H216 V216 H10 Z\"/></svg>",
+        "canonical_svg_uri": "assets/asset_marco_99550c58fc66/canonical.svg",
+        "curve_tolerance_source": 0.02,
+        "geometry_hash": "99550c58fc66ee5fe218488f08329c70eeefe73a2eea6ebcc81292135fdb7b1b",
+        "id": "asset_marco_99550c58fc66",
+        "local_bounds": [
+          -113,
+          -113,
+          113,
+          113
+        ],
+        "mm_per_source_unit": 1,
+        "name": "Marco",
+        "normalization_pose": {
+          "angle_deg": 0,
+          "scale": 1,
+          "tx": -113,
+          "ty": -113
+        },
+        "source_filename": "marco_frame.svg",
+        "source_sha256": "99550c58fc66ee5fe218488f08329c70eeefe73a2eea6ebcc81292135fdb7b1b",
+        "source_type": "svg",
+        "source_uri": "assets/asset_marco_99550c58fc66/source.svg",
+        "source_viewbox": [
+          0,
+          0,
+          226,
+          226
+        ],
+        "trace_settings": {
+          "kind": "procedural_frame"
+        }
+      },
+      "asset_marco_de11d403c4aa": {
+        "canonical_svg": "<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"223mm\" height=\"223mm\" viewBox=\"0 0 223 223\"><path fill-rule=\"evenodd\" d=\"M0,0 H223 V223 H0 Z M10,10 H213 V213 H10 Z\"/></svg>",
+        "canonical_svg_uri": "assets/asset_marco_de11d403c4aa/canonical.svg",
+        "curve_tolerance_source": 0.02,
+        "geometry_hash": "de11d403c4aaa83cf5fd5ef5e0a07980951f1bfbf85ff42a369b48bf0082e548",
+        "id": "asset_marco_de11d403c4aa",
+        "local_bounds": [
+          -111.5,
+          -111.5,
+          111.5,
+          111.5
+        ],
+        "mm_per_source_unit": 1,
+        "name": "Marco",
+        "normalization_pose": {
+          "angle_deg": 0,
+          "scale": 1,
+          "tx": -111.5,
+          "ty": -111.5
+        },
+        "source_filename": "marco_frame.svg",
+        "source_sha256": "de11d403c4aaa83cf5fd5ef5e0a07980951f1bfbf85ff42a369b48bf0082e548",
+        "source_type": "svg",
+        "source_uri": "assets/asset_marco_de11d403c4aa/source.svg",
+        "source_viewbox": [
+          0,
+          0,
+          223,
+          223
+        ],
+        "trace_settings": {
+          "kind": "procedural_frame"
+        }
+      },
+      "asset_marco_fondo_20c1ee6b8d": {
+        "canonical_svg": "<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"228mm\" height=\"228mm\" viewBox=\"0 0 228 228\"><path d=\"M0,0 H228 V228 H0 Z\"/></svg>",
+        "canonical_svg_uri": "assets/asset_marco_fondo_20c1ee6b8d/canonical.svg",
+        "curve_tolerance_source": 0.02,
+        "geometry_hash": "20c1ee6b8d1bd9e3fea8d153ccd6cdd993c517209c4afbed970bf53ef617b80c",
+        "id": "asset_marco_fondo_20c1ee6b8d",
+        "local_bounds": [
+          -114,
+          -114,
+          114,
+          114
+        ],
+        "mm_per_source_unit": 1,
+        "name": "Marco fondo",
+        "normalization_pose": {
+          "angle_deg": 0,
+          "scale": 1,
+          "tx": -114,
+          "ty": -114
+        },
+        "source_filename": "marco_fondo.svg",
+        "source_sha256": "20c1ee6b8d1bd9e3fea8d153ccd6cdd993c517209c4afbed970bf53ef617b80c",
+        "source_type": "svg",
+        "source_uri": "assets/asset_marco_fondo_20c1ee6b8d/source.svg",
+        "source_viewbox": [
+          0,
+          0,
+          228,
+          228
+        ],
+        "trace_settings": {
+          "kind": "procedural_frame_floor"
+        }
+      },
+      "asset_marco_fondo_38fc27598b": {
+        "canonical_svg": "<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"220mm\" height=\"220mm\" viewBox=\"0 0 220 220\"><path d=\"M0,0 H220 V220 H0 Z\"/></svg>",
+        "canonical_svg_uri": "assets/asset_marco_fondo_38fc27598b/canonical.svg",
+        "curve_tolerance_source": 0.02,
+        "geometry_hash": "38fc27598b6c416aeda649d692688363e39cc25c7c79001d02023ab9f7775905",
+        "id": "asset_marco_fondo_38fc27598b",
+        "local_bounds": [
+          -110,
+          -110,
+          110,
+          110
+        ],
+        "mm_per_source_unit": 1,
+        "name": "Marco fondo",
+        "normalization_pose": {
+          "angle_deg": 0,
+          "scale": 1,
+          "tx": -110,
+          "ty": -110
+        },
+        "source_filename": "marco_fondo.svg",
+        "source_sha256": "38fc27598b6c416aeda649d692688363e39cc25c7c79001d02023ab9f7775905",
+        "source_type": "svg",
+        "source_uri": "assets/asset_marco_fondo_38fc27598b/source.svg",
+        "source_viewbox": [
+          0,
+          0,
+          220,
+          220
+        ],
+        "trace_settings": {
+          "kind": "procedural_frame_floor"
+        }
+      },
+      "asset_marco_fondo_3ae78805fa": {
+        "canonical_svg": "<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"220mm\" height=\"285.2mm\" viewBox=\"0 0 220 285.2\"><path d=\"M0,0 H220 V285.2 H0 Z\"/></svg>",
+        "canonical_svg_uri": "assets/asset_marco_fondo_3ae78805fa/canonical.svg",
+        "curve_tolerance_source": 0.02,
+        "geometry_hash": "3ae78805fa3c17211ee5ee07a817e709020de108f82b813aff640da769d21e0b",
+        "id": "asset_marco_fondo_3ae78805fa",
+        "local_bounds": [
+          -110,
+          -142.6,
+          110,
+          142.6
+        ],
+        "mm_per_source_unit": 1,
+        "name": "Marco fondo",
+        "normalization_pose": {
+          "angle_deg": 0,
+          "scale": 1,
+          "tx": -110,
+          "ty": -142.6
+        },
+        "source_filename": "marco_fondo.svg",
+        "source_sha256": "3ae78805fa3c17211ee5ee07a817e709020de108f82b813aff640da769d21e0b",
+        "source_type": "svg",
+        "source_uri": "assets/asset_marco_fondo_3ae78805fa/source.svg",
+        "source_viewbox": [
+          0,
+          0,
+          220,
+          285.2
+        ],
+        "trace_settings": {
+          "kind": "procedural_frame_floor"
+        }
+      },
+      "asset_marco_fondo_c934dd7055": {
+        "canonical_svg": "<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"226mm\" height=\"226mm\" viewBox=\"0 0 226 226\"><path d=\"M0,0 H226 V226 H0 Z\"/></svg>",
+        "canonical_svg_uri": "assets/asset_marco_fondo_c934dd7055/canonical.svg",
+        "curve_tolerance_source": 0.02,
+        "geometry_hash": "c934dd705502e9716ad932b7034a0605a6bef69d4a974cd87d8edfe42b40607d",
+        "id": "asset_marco_fondo_c934dd7055",
+        "local_bounds": [
+          -113,
+          -113,
+          113,
+          113
+        ],
+        "mm_per_source_unit": 1,
+        "name": "Marco fondo",
+        "normalization_pose": {
+          "angle_deg": 0,
+          "scale": 1,
+          "tx": -113,
+          "ty": -113
+        },
+        "source_filename": "marco_fondo.svg",
+        "source_sha256": "c934dd705502e9716ad932b7034a0605a6bef69d4a974cd87d8edfe42b40607d",
+        "source_type": "svg",
+        "source_uri": "assets/asset_marco_fondo_c934dd7055/source.svg",
+        "source_viewbox": [
+          0,
+          0,
+          226,
+          226
+        ],
+        "trace_settings": {
+          "kind": "procedural_frame_floor"
+        }
+      },
+      "asset_marco_paredes_9a90fb72df": {
+        "canonical_svg": "<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"228mm\" height=\"228mm\" viewBox=\"0 0 228 228\"><path fill-rule=\"evenodd\" d=\"M0,0 H228 V228 H0 Z M12,12 H216 V216 H12 Z\"/></svg>",
+        "canonical_svg_uri": "assets/asset_marco_paredes_9a90fb72df/canonical.svg",
+        "curve_tolerance_source": 0.02,
+        "geometry_hash": "9a90fb72df86dbdc9b7ae6f6b6d53f65603beab7231f34b8c72b550362ccfc55",
+        "id": "asset_marco_paredes_9a90fb72df",
+        "local_bounds": [
+          -114,
+          -114,
+          114,
+          114
+        ],
+        "mm_per_source_unit": 1,
+        "name": "Marco paredes",
+        "normalization_pose": {
+          "angle_deg": 0,
+          "scale": 1,
+          "tx": -114,
+          "ty": -114
+        },
+        "source_filename": "marco_paredes.svg",
+        "source_sha256": "9a90fb72df86dbdc9b7ae6f6b6d53f65603beab7231f34b8c72b550362ccfc55",
+        "source_type": "svg",
+        "source_uri": "assets/asset_marco_paredes_9a90fb72df/source.svg",
+        "source_viewbox": [
+          0,
+          0,
+          228,
+          228
+        ],
+        "trace_settings": {
+          "kind": "procedural_frame_walls"
+        }
+      },
+      "asset_marco_paredes_d0971a79d9": {
+        "canonical_svg": "<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"226mm\" height=\"226mm\" viewBox=\"0 0 226 226\"><path fill-rule=\"evenodd\" d=\"M0,0 H226 V226 H0 Z M12,12 H214 V214 H12 Z\"/></svg>",
+        "canonical_svg_uri": "assets/asset_marco_paredes_d0971a79d9/canonical.svg",
+        "curve_tolerance_source": 0.02,
+        "geometry_hash": "d0971a79d99da71d373630df8865db7885818cede6bbe5ee463c8652406ecacd",
+        "id": "asset_marco_paredes_d0971a79d9",
+        "local_bounds": [
+          -113,
+          -113,
+          113,
+          113
+        ],
+        "mm_per_source_unit": 1,
+        "name": "Marco paredes",
+        "normalization_pose": {
+          "angle_deg": 0,
+          "scale": 1,
+          "tx": -113,
+          "ty": -113
+        },
+        "source_filename": "marco_paredes.svg",
+        "source_sha256": "d0971a79d99da71d373630df8865db7885818cede6bbe5ee463c8652406ecacd",
+        "source_type": "svg",
+        "source_uri": "assets/asset_marco_paredes_d0971a79d9/source.svg",
+        "source_viewbox": [
+          0,
+          0,
+          226,
+          226
+        ],
+        "trace_settings": {
+          "kind": "procedural_frame_walls"
+        }
+      },
+      "asset_marco_paredes_fe0f245507": {
+        "canonical_svg": "<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"220mm\" height=\"220mm\" viewBox=\"0 0 220 220\"><path fill-rule=\"evenodd\" d=\"M0,0 H220 V220 H0 Z M8,8 H212 V212 H8 Z\"/></svg>",
+        "canonical_svg_uri": "assets/asset_marco_paredes_fe0f245507/canonical.svg",
+        "curve_tolerance_source": 0.02,
+        "geometry_hash": "fe0f2455079e96b3d036ec0644fa53024ec1e154cee2c1adae9e000a6fd35a2f",
+        "id": "asset_marco_paredes_fe0f245507",
+        "local_bounds": [
+          -110,
+          -110,
+          110,
+          110
+        ],
+        "mm_per_source_unit": 1,
+        "name": "Marco paredes",
+        "normalization_pose": {
+          "angle_deg": 0,
+          "scale": 1,
+          "tx": -110,
+          "ty": -110
+        },
+        "source_filename": "marco_paredes.svg",
+        "source_sha256": "fe0f2455079e96b3d036ec0644fa53024ec1e154cee2c1adae9e000a6fd35a2f",
+        "source_type": "svg",
+        "source_uri": "assets/asset_marco_paredes_fe0f245507/source.svg",
+        "source_viewbox": [
+          0,
+          0,
+          220,
+          220
+        ],
+        "trace_settings": {
+          "kind": "procedural_frame_walls"
+        }
+      },
+      "asset_marco_paredes_ffed627dbf": {
+        "canonical_svg": "<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"220mm\" height=\"285.2mm\" viewBox=\"0 0 220 285.2\"><path fill-rule=\"evenodd\" d=\"M0,0 H220 V285.2 H0 Z M8,40.6 H212 V244.6 H8 Z\"/></svg>",
+        "canonical_svg_uri": "assets/asset_marco_paredes_ffed627dbf/canonical.svg",
+        "curve_tolerance_source": 0.02,
+        "geometry_hash": "ffed627dbf3a8ca7169f6e35857aab9e7f523e44a8da8884ed0228a5b1fc5463",
+        "id": "asset_marco_paredes_ffed627dbf",
+        "local_bounds": [
+          -110,
+          -142.6,
+          110,
+          142.6
+        ],
+        "mm_per_source_unit": 1,
+        "name": "Marco paredes",
+        "normalization_pose": {
+          "angle_deg": 0,
+          "scale": 1,
+          "tx": -110,
+          "ty": -142.6
+        },
+        "source_filename": "marco_paredes.svg",
+        "source_sha256": "ffed627dbf3a8ca7169f6e35857aab9e7f523e44a8da8884ed0228a5b1fc5463",
+        "source_type": "svg",
+        "source_uri": "assets/asset_marco_paredes_ffed627dbf/source.svg",
+        "source_viewbox": [
+          0,
+          0,
+          220,
+          285.2
+        ],
+        "trace_settings": {
+          "kind": "procedural_frame_walls"
+        }
       }
     },
     "layers": {
@@ -148,7 +488,7 @@
           "tx": 100,
           "ty": 100
         },
-        "stack_rank": 2,
+        "stack_rank": 4,
         "visible": true
       },
       "layer_08a7d1f71f15_0": {
@@ -165,18 +505,19 @@
           "sibling_gap_mm": 2,
           "target": "canvas"
         },
+        "flip_h": true,
         "id": "layer_08a7d1f71f15_0",
         "locked": false,
         "name": "0001 Sugimori Style",
         "order": 0,
         "parent_id": "layer_0e647b159266_0",
         "pose": {
-          "tx": 22.502901320735845,
-          "ty": 14.241333248373294,
-          "scale": 0.7430116896097658,
+          "tx": 28.04069619932693,
+          "ty": 4.531600120429459,
+          "scale": 0.7747975178681541,
           "angle_deg": 0
         },
-        "stack_rank": 0,
+        "stack_rank": 2,
         "visible": true
       },
       "layer_0e647b159266_0": {
@@ -199,10 +540,66 @@
         "order": 0,
         "parent_id": "layer_04ef73c76fa5_0",
         "pose": {
-          "tx": -9.377631485846763,
-          "ty": 25.610769987297374,
-          "scale": 0.659055240023697,
-          "angle_deg": 0
+          "angle_deg": 0,
+          "scale": 0.6590552400236969,
+          "tx": -9.377631485846734,
+          "ty": 25.610769987297374
+        },
+        "stack_rank": 3,
+        "visible": true
+      },
+      "layer_marco_fondo_mu4n0ah7": {
+        "asset_id": "asset_marco_fondo_c934dd7055",
+        "export_enabled": true,
+        "extrusion_mm": null,
+        "fit": {
+          "allow_rotation": false,
+          "auto_scale_while_dragging": false,
+          "avoid_siblings": true,
+          "hole_id": null,
+          "padding_mm": 0,
+          "rotation_half_range_deg": 20,
+          "sibling_gap_mm": 2,
+          "target": "canvas"
+        },
+        "id": "layer_marco_fondo_mu4n0ah7",
+        "locked": false,
+        "name": "Marco fondo",
+        "order": 0,
+        "parent_id": null,
+        "pose": {
+          "angle_deg": 0,
+          "scale": 1,
+          "tx": 100,
+          "ty": 100
+        },
+        "stack_rank": 0,
+        "visible": true
+      },
+      "layer_marco_paredes_mu4n0ah7": {
+        "asset_id": "asset_marco_paredes_d0971a79d9",
+        "export_enabled": true,
+        "extrusion_mm": 12,
+        "fit": {
+          "allow_rotation": false,
+          "auto_scale_while_dragging": false,
+          "avoid_siblings": true,
+          "hole_id": null,
+          "padding_mm": 0,
+          "rotation_half_range_deg": 20,
+          "sibling_gap_mm": 2,
+          "target": "canvas"
+        },
+        "id": "layer_marco_paredes_mu4n0ah7",
+        "locked": false,
+        "name": "Marco paredes",
+        "order": 1,
+        "parent_id": null,
+        "pose": {
+          "angle_deg": 0,
+          "scale": 1,
+          "tx": 100,
+          "ty": 100
         },
         "stack_rank": 1,
         "visible": true
@@ -210,296 +607,6 @@
     }
   },
   "command_results": {
-    "import_doc_7a24e3b37e0c_647dc94c": {
-      "type": "add_layers",
-      "status": "committed",
-      "revision": 1
-    },
-    "import_doc_7a24e3b37e0c_76a40734": {
-      "type": "add_layers",
-      "status": "committed",
-      "revision": 2
-    },
-    "cmd_1789570102273_1": {
-      "type": "set_pose",
-      "status": "committed",
-      "revision": 3
-    },
-    "cmd_1789570105329_2": {
-      "type": "delete_subtree",
-      "status": "committed",
-      "revision": 4
-    },
-    "import_doc_7a24e3b37e0c_e9b118a7": {
-      "type": "add_layers",
-      "status": "committed",
-      "revision": 5
-    },
-    "cmd_1789570112015_3": {
-      "type": "set_parent",
-      "status": "committed",
-      "revision": 6
-    },
-    "cmd_1789570112039_4": {
-      "type": "apply_fit_result",
-      "status": "committed",
-      "revision": 7
-    },
-    "cmd_1789570895432_1": {
-      "type": "set_pose",
-      "status": "committed",
-      "revision": 8
-    },
-    "cmd_1789570895999_2": {
-      "type": "set_pose",
-      "status": "committed",
-      "revision": 9
-    },
-    "cmd_1789570901598_3": {
-      "type": "set_pose",
-      "status": "committed",
-      "revision": 10
-    },
-    "cmd_1789571034149_1": {
-      "type": "set_pose",
-      "status": "committed",
-      "revision": 11
-    },
-    "cmd_1789571035508_2": {
-      "type": "set_pose",
-      "status": "committed",
-      "revision": 12
-    },
-    "cmd_1789571036244_3": {
-      "type": "set_pose",
-      "status": "committed",
-      "revision": 13
-    },
-    "cmd_1789571215851_1": {
-      "type": "set_pose",
-      "status": "committed",
-      "revision": 14
-    },
-    "cmd_1789571216486_2": {
-      "type": "set_pose",
-      "status": "committed",
-      "revision": 15
-    },
-    "cmd_1789571243770_1": {
-      "type": "set_pose",
-      "status": "committed",
-      "revision": 16
-    },
-    "cmd_1789571388142_1": {
-      "type": "set_pose",
-      "status": "committed",
-      "revision": 17
-    },
-    "cmd_1789571389965_2": {
-      "type": "set_pose",
-      "status": "committed",
-      "revision": 18
-    },
-    "cmd_1789571397780_3": {
-      "type": "set_pose",
-      "status": "committed",
-      "revision": 19
-    },
-    "cmd_1789571399611_4": {
-      "type": "set_pose",
-      "status": "committed",
-      "revision": 20
-    },
-    "cmd_1789571401743_5": {
-      "type": "set_pose",
-      "status": "committed",
-      "revision": 21
-    },
-    "cmd_1789571402758_6": {
-      "type": "restore_snapshot",
-      "status": "committed",
-      "revision": 22
-    },
-    "cmd_1789571403653_7": {
-      "type": "apply_fit_result",
-      "status": "committed",
-      "revision": 23
-    },
-    "cmd_1789571405572_8": {
-      "type": "set_pose",
-      "status": "committed",
-      "revision": 24
-    },
-    "cmd_1789571405999_9": {
-      "type": "set_pose",
-      "status": "committed",
-      "revision": 25
-    },
-    "cmd_1789571407824_10": {
-      "type": "apply_fit_result",
-      "status": "committed",
-      "revision": 26
-    },
-    "cmd_1789571410201_11": {
-      "type": "set_pose",
-      "status": "committed",
-      "revision": 27
-    },
-    "cmd_1789571415137_12": {
-      "type": "set_pose",
-      "status": "committed",
-      "revision": 28
-    },
-    "cmd_1789571416372_13": {
-      "type": "set_pose",
-      "status": "committed",
-      "revision": 29
-    },
-    "cmd_1789571417772_14": {
-      "type": "apply_fit_result",
-      "status": "committed",
-      "revision": 30
-    },
-    "cmd_1789571419109_15": {
-      "type": "apply_fit_result",
-      "status": "committed",
-      "revision": 31
-    },
-    "cmd_1789571422059_16": {
-      "type": "set_pose",
-      "status": "committed",
-      "revision": 32
-    },
-    "cmd_1789571422649_17": {
-      "type": "restore_snapshot",
-      "status": "committed",
-      "revision": 33
-    },
-    "cmd_1789571424324_18": {
-      "type": "apply_fit_result",
-      "status": "committed",
-      "revision": 34
-    },
-    "cmd_1789571424667_19": {
-      "type": "apply_fit_result",
-      "status": "committed",
-      "revision": 35
-    },
-    "cmd_1789571426283_20": {
-      "type": "set_pose",
-      "status": "committed",
-      "revision": 36
-    },
-    "cmd_1789571428391_21": {
-      "type": "set_pose",
-      "status": "committed",
-      "revision": 37
-    },
-    "cmd_1789571430520_22": {
-      "type": "apply_fit_result",
-      "status": "committed",
-      "revision": 38
-    },
-    "cmd_1789571438143_23": {
-      "type": "set_pose",
-      "status": "committed",
-      "revision": 39
-    },
-    "cmd_1789571439255_24": {
-      "type": "restore_snapshot",
-      "status": "committed",
-      "revision": 40
-    },
-    "cmd_1789571662065_1": {
-      "type": "apply_fit_result",
-      "status": "committed",
-      "revision": 41
-    },
-    "cmd_1789571665127_2": {
-      "type": "apply_fit_result",
-      "status": "committed",
-      "revision": 42
-    },
-    "cmd_1789572257603_1": {
-      "type": "set_pose",
-      "status": "committed",
-      "revision": 43
-    },
-    "cmd_1789572259269_2": {
-      "type": "set_pose",
-      "status": "committed",
-      "revision": 44
-    },
-    "cmd_1789572260380_3": {
-      "type": "restore_snapshot",
-      "status": "committed",
-      "revision": 45
-    },
-    "cmd_1789572261300_4": {
-      "type": "apply_fit_result",
-      "status": "committed",
-      "revision": 46
-    },
-    "cmd_1789572262587_5": {
-      "type": "set_pose",
-      "status": "committed",
-      "revision": 47
-    },
-    "cmd_1789572270485_6": {
-      "type": "set_pose",
-      "status": "committed",
-      "revision": 48
-    },
-    "cmd_1789572273787_7": {
-      "type": "set_pose",
-      "status": "committed",
-      "revision": 49
-    },
-    "cmd_1789572281901_8": {
-      "type": "set_pose",
-      "status": "committed",
-      "revision": 50
-    },
-    "cmd_1789572282881_9": {
-      "type": "apply_fit_result",
-      "status": "committed",
-      "revision": 51
-    },
-    "cmd_1789572288103_10": {
-      "type": "set_pose",
-      "status": "committed",
-      "revision": 52
-    },
-    "cmd_1789572290802_11": {
-      "type": "set_pose",
-      "status": "committed",
-      "revision": 53
-    },
-    "cmd_1789572292154_12": {
-      "type": "set_pose",
-      "status": "committed",
-      "revision": 54
-    },
-    "import_doc_7a24e3b37e0c_236a4576": {
-      "type": "add_layers",
-      "status": "committed",
-      "revision": 55
-    },
-    "cmd_1789572305880_13": {
-      "type": "set_parent",
-      "status": "committed",
-      "revision": 56
-    },
-    "cmd_1789572346904_14": {
-      "type": "apply_fit_result",
-      "status": "committed",
-      "revision": 57
-    },
-    "cmd_1789572351941_17": {
-      "type": "apply_fit_result",
-      "status": "committed",
-      "revision": 58
-    },
     "cmd_1789572387992_20": {
       "type": "apply_fit_result",
       "status": "committed",
@@ -724,6 +831,421 @@
       "type": "set_layer_properties",
       "status": "committed",
       "revision": 103
+    },
+    "cmd_1789582427901_1": {
+      "type": "set_parent",
+      "status": "committed",
+      "revision": 104
+    },
+    "cmd_1789582427935_2": {
+      "type": "set_parent",
+      "status": "committed",
+      "revision": 105
+    },
+    "cmd_1789582427968_3": {
+      "type": "set_parent",
+      "status": "committed",
+      "revision": 106
+    },
+    "cmd_1789582428006_4": {
+      "type": "set_parent",
+      "status": "committed",
+      "revision": 107
+    },
+    "cmd_1789582902362_1": {
+      "type": "set_pose",
+      "status": "committed",
+      "revision": 108
+    },
+    "cmd_1789582903341_2": {
+      "type": "restore_snapshot",
+      "status": "committed",
+      "revision": 109
+    },
+    "cmd_1789583564693_2": {
+      "type": "add_layers",
+      "status": "committed",
+      "revision": 110
+    },
+    "cmd_1789583564728_3": {
+      "type": "set_stack_order",
+      "status": "committed",
+      "revision": 111
+    },
+    "cmd_1789583564754_4": {
+      "type": "reorder_siblings",
+      "status": "committed",
+      "revision": 112
+    },
+    "cmd_1789589621011_6": {
+      "type": "delete_subtree",
+      "status": "committed",
+      "revision": 113
+    },
+    "cmd_1789589621040_7": {
+      "type": "add_layers",
+      "status": "committed",
+      "revision": 114
+    },
+    "cmd_1789589621071_8": {
+      "type": "set_stack_order",
+      "status": "committed",
+      "revision": 115
+    },
+    "cmd_1789589621109_9": {
+      "type": "reorder_siblings",
+      "status": "committed",
+      "revision": 116
+    },
+    "cmd_1789590022792_2": {
+      "type": "delete_subtree",
+      "status": "committed",
+      "revision": 117
+    },
+    "cmd_1789590022821_3": {
+      "type": "add_layers",
+      "status": "committed",
+      "revision": 118
+    },
+    "cmd_1789590022854_4": {
+      "type": "set_stack_order",
+      "status": "committed",
+      "revision": 119
+    },
+    "cmd_1789590022887_5": {
+      "type": "reorder_siblings",
+      "status": "committed",
+      "revision": 120
+    },
+    "cmd_1789590045841_7": {
+      "type": "delete_subtree",
+      "status": "committed",
+      "revision": 121
+    },
+    "cmd_1789590045872_8": {
+      "type": "delete_subtree",
+      "status": "committed",
+      "revision": 122
+    },
+    "cmd_1789590045895_9": {
+      "type": "add_layers",
+      "status": "committed",
+      "revision": 123
+    },
+    "cmd_1789590045924_10": {
+      "type": "set_stack_order",
+      "status": "committed",
+      "revision": 124
+    },
+    "cmd_1789590045964_11": {
+      "type": "reorder_siblings",
+      "status": "committed",
+      "revision": 125
+    },
+    "cmd_1789590101960_13": {
+      "type": "delete_subtree",
+      "status": "committed",
+      "revision": 126
+    },
+    "cmd_1789590101997_14": {
+      "type": "delete_subtree",
+      "status": "committed",
+      "revision": 127
+    },
+    "cmd_1789590102026_15": {
+      "type": "add_layers",
+      "status": "committed",
+      "revision": 128
+    },
+    "cmd_1789590102077_16": {
+      "type": "set_stack_order",
+      "status": "committed",
+      "revision": 129
+    },
+    "cmd_1789590102102_17": {
+      "type": "reorder_siblings",
+      "status": "committed",
+      "revision": 130
+    },
+    "cmd_1789590104191_18": {
+      "type": "set_pose",
+      "status": "committed",
+      "revision": 131
+    },
+    "cmd_1789590105633_19": {
+      "type": "restore_snapshot",
+      "status": "committed",
+      "revision": 132
+    },
+    "cmd_1789590117091_21": {
+      "type": "delete_subtree",
+      "status": "committed",
+      "revision": 133
+    },
+    "cmd_1789590117126_22": {
+      "type": "delete_subtree",
+      "status": "committed",
+      "revision": 134
+    },
+    "cmd_1789590117148_23": {
+      "type": "add_layers",
+      "status": "committed",
+      "revision": 135
+    },
+    "cmd_1789590117176_24": {
+      "type": "set_stack_order",
+      "status": "committed",
+      "revision": 136
+    },
+    "cmd_1789590117202_25": {
+      "type": "reorder_siblings",
+      "status": "committed",
+      "revision": 137
+    },
+    "cmd_1789595303878_2": {
+      "type": "delete_subtree",
+      "status": "committed",
+      "revision": 138
+    },
+    "cmd_1789595303904_3": {
+      "type": "delete_subtree",
+      "status": "committed",
+      "revision": 139
+    },
+    "cmd_1789595303931_4": {
+      "type": "add_layers",
+      "status": "committed",
+      "revision": 140
+    },
+    "cmd_1789595303979_5": {
+      "type": "set_layer_properties",
+      "status": "committed",
+      "revision": 141
+    },
+    "cmd_1789595304012_6": {
+      "type": "set_stack_order",
+      "status": "committed",
+      "revision": 142
+    },
+    "cmd_1789595304053_7": {
+      "type": "reorder_siblings",
+      "status": "committed",
+      "revision": 143
+    },
+    "cmd_1789595522312_1": {
+      "type": "set_pose",
+      "status": "committed",
+      "revision": 144
+    },
+    "cmd_1789595524798_2": {
+      "type": "restore_snapshot",
+      "status": "committed",
+      "revision": 145
+    },
+    "cmd_1789595526993_3": {
+      "type": "apply_fit_result",
+      "status": "committed",
+      "revision": 146
+    },
+    "cmd_1789595527027_4": {
+      "type": "apply_fit_result",
+      "status": "committed",
+      "revision": 147
+    },
+    "cmd_1789595527053_5": {
+      "type": "apply_fit_result",
+      "status": "committed",
+      "revision": 148
+    },
+    "cmd_1789595534243_7": {
+      "type": "delete_subtree",
+      "status": "committed",
+      "revision": 149
+    },
+    "cmd_1789595534267_8": {
+      "type": "delete_subtree",
+      "status": "committed",
+      "revision": 150
+    },
+    "cmd_1789595534289_9": {
+      "type": "add_layers",
+      "status": "committed",
+      "revision": 151
+    },
+    "cmd_1789595534312_10": {
+      "type": "set_layer_properties",
+      "status": "committed",
+      "revision": 152
+    },
+    "cmd_1789595534337_11": {
+      "type": "set_stack_order",
+      "status": "committed",
+      "revision": 153
+    },
+    "cmd_1789595534395_12": {
+      "type": "reorder_siblings",
+      "status": "committed",
+      "revision": 154
+    },
+    "cmd_1789595550060_14": {
+      "type": "delete_subtree",
+      "status": "committed",
+      "revision": 155
+    },
+    "cmd_1789595550086_15": {
+      "type": "delete_subtree",
+      "status": "committed",
+      "revision": 156
+    },
+    "cmd_1789595550111_16": {
+      "type": "add_layers",
+      "status": "committed",
+      "revision": 157
+    },
+    "cmd_1789595550134_17": {
+      "type": "set_layer_properties",
+      "status": "committed",
+      "revision": 158
+    },
+    "cmd_1789595550156_18": {
+      "type": "set_stack_order",
+      "status": "committed",
+      "revision": 159
+    },
+    "cmd_1789595550178_19": {
+      "type": "reorder_siblings",
+      "status": "committed",
+      "revision": 160
+    },
+    "cmd_1789595558397_21": {
+      "type": "delete_subtree",
+      "status": "committed",
+      "revision": 161
+    },
+    "cmd_1789595558423_22": {
+      "type": "delete_subtree",
+      "status": "committed",
+      "revision": 162
+    },
+    "cmd_1789595558446_23": {
+      "type": "add_layers",
+      "status": "committed",
+      "revision": 163
+    },
+    "cmd_1789595558471_24": {
+      "type": "set_layer_properties",
+      "status": "committed",
+      "revision": 164
+    },
+    "cmd_1789595558495_25": {
+      "type": "set_stack_order",
+      "status": "committed",
+      "revision": 165
+    },
+    "cmd_1789595558520_26": {
+      "type": "reorder_siblings",
+      "status": "committed",
+      "revision": 166
+    },
+    "cmd_1789595589643_28": {
+      "type": "delete_subtree",
+      "status": "committed",
+      "revision": 167
+    },
+    "cmd_1789595589672_29": {
+      "type": "delete_subtree",
+      "status": "committed",
+      "revision": 168
+    },
+    "cmd_1789595589706_30": {
+      "type": "add_layers",
+      "status": "committed",
+      "revision": 169
+    },
+    "cmd_1789595589743_31": {
+      "type": "set_layer_properties",
+      "status": "committed",
+      "revision": 170
+    },
+    "cmd_1789595589767_32": {
+      "type": "set_stack_order",
+      "status": "committed",
+      "revision": 171
+    },
+    "cmd_1789595589790_33": {
+      "type": "reorder_siblings",
+      "status": "committed",
+      "revision": 172
+    },
+    "cmd_1789595674016_1": {
+      "type": "set_layer_properties",
+      "status": "committed",
+      "revision": 173
+    },
+    "cmd_1789595688158_2": {
+      "type": "restore_snapshot",
+      "status": "committed",
+      "revision": 174
+    },
+    "cmd_1789595692961_3": {
+      "type": "set_layer_properties",
+      "status": "committed",
+      "revision": 175
+    },
+    "cmd_1789595695599_4": {
+      "type": "set_pose",
+      "status": "committed",
+      "revision": 176
+    },
+    "cmd_1789595697773_5": {
+      "type": "set_pose",
+      "status": "committed",
+      "revision": 177
+    },
+    "cmd_1789595697946_6": {
+      "type": "restore_snapshot",
+      "status": "committed",
+      "revision": 178
+    },
+    "cmd_1789595698777_7": {
+      "type": "set_pose",
+      "status": "committed",
+      "revision": 179
+    },
+    "cmd_1789595714118_8": {
+      "type": "restore_snapshot",
+      "status": "committed",
+      "revision": 180
+    },
+    "cmd_1789595724137_9": {
+      "type": "set_pose",
+      "status": "committed",
+      "revision": 181
+    },
+    "cmd_1789596057107_1": {
+      "type": "set_pose",
+      "status": "committed",
+      "revision": 182
+    },
+    "cmd_1789596064654_2": {
+      "type": "set_pose",
+      "status": "committed",
+      "revision": 183
+    },
+    "cmd_1789596070764_3": {
+      "type": "set_pose",
+      "status": "committed",
+      "revision": 184
+    },
+    "cmd_1789596073213_4": {
+      "type": "set_pose",
+      "status": "committed",
+      "revision": 185
+    },
+    "cmd_1789596079136_5": {
+      "type": "set_pose",
+      "status": "committed",
+      "revision": 186
     }
   }
 }

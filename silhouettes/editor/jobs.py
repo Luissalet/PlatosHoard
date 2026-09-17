@@ -128,8 +128,13 @@ def worker_main(payload: Dict[str, Any]) -> Dict[str, Any]:
 
     ``payload`` must be a plain dict with at least:
 
-    * ``"task"`` – str, the task name (e.g. ``"synthetic"``).
-    * ``"iterations"`` – int, number of evaluation blocks (default 10).
+    * ``"task"`` – str, the task name (e.g. ``"synthetic"`` or ``"export"``).
+
+    For ``task == "export"`` the payload must also include a serialised plan,
+    formats, canvas size and ``output_path``; the worker writes a ZIP and
+    returns ``{"download_path": ...}``.
+
+    For synthetic tasks, ``"iterations"`` controls the evaluation loop.
 
     The worker polls the shared cancel event (set via the pool initializer)
     on every iteration.  If it is set, the worker returns
@@ -138,8 +143,11 @@ def worker_main(payload: Dict[str, Any]) -> Dict[str, Any]:
     Returns a plain dict (serializable).  No Flask objects, no store
     references, no closures.
     """
-    iterations: int = int(payload.get("iterations", 10))
     task: str = payload.get("task", "synthetic")
+    if task == "export":
+        return _worker_export(payload)
+
+    iterations: int = int(payload.get("iterations", 10))
 
     for i in range(iterations):
         # Cooperative cancellation check
@@ -153,6 +161,83 @@ def worker_main(payload: Dict[str, Any]) -> Dict[str, Any]:
         "cancelled": False,
         "completed_iterations": iterations,
         "task": task,
+    }
+
+
+def _worker_export(payload: Dict[str, Any]) -> Dict[str, Any]:
+    """Pack a serialised export plan into a ZIP on disk."""
+    import base64
+
+    from shapely.wkb import loads as wkb_loads
+
+    from .exports import ExportError, ExportItem, pack_bundle
+    from .mesh_adapter import export_stl
+    from .transforms import Pose
+
+    if _worker_cancel_event is not None and _worker_cancel_event.is_set():
+        return {"cancelled": True}
+
+    out_path = payload.get("output_path")
+    if not out_path:
+        return {
+            "cancelled": False,
+            "error": {"code": "NO_OUTPUT_PATH", "message": "missing output_path"},
+        }
+
+    try:
+        plan_items: list[ExportItem] = []
+        for row in payload.get("plan") or []:
+            geom = wkb_loads(base64.b64decode(row["geom_hex"]))
+            pose_d = row.get("pose") or {
+                "tx": 0.0, "ty": 0.0, "scale": 1.0, "angle_deg": 0.0,
+            }
+            plan_items.append(ExportItem(
+                stem=str(row["stem"]),
+                layer_id=str(row["layer_id"]),
+                family=str(row["family"]),
+                geometry=geom,
+                pose=Pose.from_dict(pose_d),
+                extrusion_mm=float(row["extrusion_mm"]),
+            ))
+        if not plan_items:
+            return {
+                "cancelled": False,
+                "error": {"code": "EMPTY_PLAN", "message": "export plan is empty"},
+            }
+
+        formats = list(payload.get("formats") or ["svg"])
+        stl_fn = export_stl if "stl" in formats else None
+        blob = pack_bundle(
+            plan_items,
+            float(payload["width_mm"]),
+            float(payload["height_mm"]),
+            project_revision=int(payload.get("project_revision") or 1),
+            formats=formats,
+            png_width_px=int(payload.get("png_width_px") or 1000),
+            stl_exporter=stl_fn,
+        )
+    except ExportError as exc:
+        return {
+            "cancelled": False,
+            "error": {"code": exc.code, "message": str(exc)},
+        }
+    except Exception as exc:
+        return {
+            "cancelled": False,
+            "error": {"code": "EXPORT_WORKER_ERROR", "message": str(exc)},
+        }
+
+    if _worker_cancel_event is not None and _worker_cancel_event.is_set():
+        return {"cancelled": True}
+
+    path = Path(out_path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_bytes(blob)
+    return {
+        "cancelled": False,
+        "download_path": str(path),
+        "bytes": len(blob),
+        "task": "export",
     }
 
 
@@ -186,6 +271,10 @@ class JobScheduler:
         self._cancel_event: mp.Event = self._ctx.Event()
         self._pool: Optional[mp.Pool] = None
         self._futures: Dict[str, Any] = {}  # job_id → pool AsyncResult
+
+    @property
+    def output_dir(self) -> Optional[Path]:
+        return self._output_dir
 
     # -- lifecycle ----------------------------------------------------------
 
@@ -283,11 +372,18 @@ class JobScheduler:
             if result.get("cancelled"):
                 rec.state = JobState.CANCELLED
                 rec.result = result
+            elif result.get("error"):
+                rec.state = JobState.FAILED
+                rec.error = result["error"]
+                rec.result = result
             else:
                 rec.state = JobState.COMPLETED
                 rec.result = result
                 rec.progress = 1.0
                 rec.phase = "completed"
+                dl = result.get("download_path")
+                if dl:
+                    rec.download_path = str(dl)
 
     def _poll_all(self) -> None:
         for job_id in list(self._futures.keys()):

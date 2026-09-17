@@ -327,6 +327,10 @@
         "export_enabled": {
           "type": "boolean"
         },
+        "flip_h": {
+          "type": "boolean",
+          "description": "Mirror the layer horizontally in local space (x → −x) before pose."
+        },
         "extrusion_mm": {
           "anyOf": [
             {

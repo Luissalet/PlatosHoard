@@ -153,6 +153,24 @@ export class Inspector {
     lockRow.appendChild(locked);
     this.el.appendChild(lockRow);
 
+    const flipH = document.createElement('input');
+    flipH.type = 'checkbox';
+    flipH.checked = !!node.flip_h;
+    flipH.addEventListener('change', async () => {
+      try {
+        await store.commitCommand('set_layer_properties', { layer_id: layerId, flip_h: flipH.checked });
+        this.viewport.renderLayers();
+        this.viewport.renderSelection();
+        this.render(layerId);
+        window.dispatchEvent(new CustomEvent('editor:doc-changed'));
+      } catch (err) { this._flash(err.message); }
+    });
+    const flipRow = document.createElement('label');
+    flipRow.className = 'insp-row checkbox-row';
+    flipRow.textContent = 'Flip horizontal ';
+    flipRow.appendChild(flipH);
+    this.el.appendChild(flipRow);
+
     const exportEnabled = document.createElement('input');
     exportEnabled.type = 'checkbox';
     exportEnabled.checked = node.export_enabled !== false;

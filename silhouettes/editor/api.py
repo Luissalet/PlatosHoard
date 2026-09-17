@@ -45,7 +45,9 @@ from .jobs import JobScheduler
 from .mesh_adapter import MeshAdapterError, export_stl
 from .models import DocumentError, validate_document
 from .project_io import ProjectIOError, load_package, save_package
-from .transforms import Pose, apply_pose, compose_pose, normalize_asset, reparent_pose, world_pose
+from .transforms import (
+    Pose, apply_flip_h, apply_pose, compose_pose, normalize_asset, reparent_pose, world_pose,
+)
 from shapely.ops import unary_union
 
 log = logging.getLogger("silhouettes.editor.api")
@@ -131,14 +133,23 @@ def _asset_geometry(doc: dict, asset_id: str):
     return local
 
 
-def _layer_world_geom(doc: dict, layer_id: str):
-    """World geometry of a layer (local mm geometry under world pose)."""
+def _local_geom_for_layer(doc: dict, layer_id: str):
+    """Asset local mm geometry with optional horizontal flip."""
     node = doc["layers"].get(layer_id)
     if node is None:
         raise CommandError("UNKNOWN_LAYER", f"layer {layer_id!r} not found", status=404)
     geom = _asset_geometry(doc, node["asset_id"])
-    wp = world_pose(layer_id, doc["layers"])
-    return apply_pose(geom, wp)
+    if node.get("flip_h"):
+        geom = apply_flip_h(geom)
+    return geom
+
+
+def _layer_world_geom(doc: dict, layer_id: str):
+    """World geometry of a layer (local mm geometry under world pose + flip_h)."""
+    if layer_id not in doc["layers"]:
+        raise CommandError("UNKNOWN_LAYER", f"layer {layer_id!r} not found", status=404)
+    geom = _local_geom_for_layer(doc, layer_id)
+    return apply_pose(geom, world_pose(layer_id, doc["layers"]))
 
 
 def _pose_to_dict(pose: Pose) -> dict:
@@ -166,7 +177,7 @@ def _run_fit_sync(doc: dict, body: dict) -> dict:
     mode = body.get("mode", "best")  # "best" | "at_position"
 
     node = doc["layers"][layer_id]
-    local_geom = _asset_geometry(doc, node["asset_id"])
+    local_geom = _local_geom_for_layer(doc, layer_id)
 
     if target == "canvas":
         canvas = doc["canvas"]
@@ -499,7 +510,7 @@ def _constrain_pose_to_parent(doc: dict, layer_id: str, pose_local: Pose,
     if parent_id is None:
         return pose_local
 
-    local_geom = _asset_geometry(doc, node["asset_id"])
+    local_geom = _local_geom_for_layer(doc, layer_id)
     parent_world = _layer_world_geom(doc, parent_id)
     pw = world_pose(parent_id, doc["layers"])
     pose_world = compose_pose(pw, pose_local)
@@ -741,7 +752,7 @@ def post_exports(doc_id: str) -> Any:
     sched = _get_scheduler()
 
     layer_ids = body.get("layer_ids", list(doc["layers"].keys()))
-    families = body.get("families", ["normal_registered", "inverse_registered", "normal_fullframe"])
+    families = body.get("families", ["normal_registered", "inverse_registered", "normal_fullframe", "inverse_fullframe"])
     formats = body.get("formats", ["svg", "png", "stl"])
     png_width = int(body.get("png_width_px", 1000))
     request_seq = body.get("request_seq")
@@ -782,7 +793,7 @@ def post_exports(doc_id: str) -> Any:
             "stem": item.stem,
             "extrusion_mm": item.extrusion_mm,
             "geom_hex": base64.b64encode(wkb_dumps(item.geometry)).decode("ascii"),
-            "pose": asdict(item.pose) if hasattr(item, 'pose') else None,
+            "pose": _pose_to_dict(item.pose) if item.pose is not None else None,
         })
 
     payload = {
@@ -794,6 +805,10 @@ def post_exports(doc_id: str) -> Any:
         "png_width_px": png_width,
         "project_revision": doc["revision"],
     }
+    out_dir = sched.output_dir
+    if out_dir is not None:
+        out_dir.mkdir(parents=True, exist_ok=True)
+        payload["output_path"] = str(out_dir / f"export_{uuid.uuid4().hex[:12]}.zip")
 
     rec = sched.submit(
         job_type="export",

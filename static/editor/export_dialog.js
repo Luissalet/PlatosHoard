@@ -1,18 +1,25 @@
 // export_dialog.js — recipe preview + batch export (tasks 18, 20)
-// The counter shows N layers × active families. With 3 layers and 3
-// families it reads 9 pieces; with SVG+PNG+STL it reads 27 files + manifest.
+// Batch = 4 silhouette families + marco pieces once.
 import { store } from './store.js';
 
 const FAMILIES = [
-  { id: 'normal_registered', label: 'Sólidas apiladas (normal)' },
-  { id: 'inverse_registered', label: 'Planchas con huecos (inverse)' },
-  { id: 'normal_fullframe', label: 'Independientes a recuadro (fullframe)' },
+  { id: 'normal_registered', label: 'Sólidas anidadas (matrioska)' },
+  { id: 'inverse_registered', label: 'Inversa anidada (huecos)' },
+  { id: 'normal_fullframe', label: 'Sólida fit canvas (centrada)' },
+  { id: 'inverse_fullframe', label: 'Inversa fit canvas (centrada)' },
 ];
 const FORMATS = [
   { id: 'svg', label: 'SVG' },
   { id: 'png', label: 'PNG' },
   { id: 'stl', label: 'STL' },
 ];
+
+function isMarcoLayer(layer) {
+  if (!layer) return false;
+  const name = layer.name || '';
+  return name === 'Marco' || name === 'Marco fondo' || name === 'Marco paredes'
+    || String(layer.id || '').startsWith('layer_marco_');
+}
 
 export class ExportDialog {
   /**
@@ -31,7 +38,6 @@ export class ExportDialog {
   _activeFamilies() {
     const sel = this.els.recipeSelect;
     if (!sel) return FAMILIES.map(f => f.id);
-    // "batch" option exports all three families (normal + inverse + fullframe)
     if (sel.value === 'batch_all') return FAMILIES.map(f => f.id);
     return [sel.value];
   }
@@ -48,11 +54,19 @@ export class ExportDialog {
 
   updateCounter() {
     const batchish = this.els.recipeSelect?.value === 'batch_all';
-    const n = this._selectedLayerIds(batchish).length;
+    const ids = this._selectedLayerIds(batchish);
+    const layers = store.doc?.layers || {};
+    let sil = 0;
+    let marco = 0;
+    for (const id of ids) {
+      if (isMarcoLayer(layers[id])) marco += 1;
+      else sil += 1;
+    }
     const fams = this._activeFamilies().length;
     const fmts = this._activeFormats().length;
-    const pieces = n * fams;
-    const files = n * fams * fmts;
+    // Marco always exports once (normal), independent of family count.
+    const pieces = sil * fams + marco;
+    const files = pieces * fmts;
     const el = this.els.fitStatus;
     if (el) {
       el.textContent = `${pieces} piezas · ${files} archivos + manifest.json`;
@@ -113,12 +127,14 @@ export class ExportDialog {
           URL.revokeObjectURL(url);
           set('Exportación descargada.');
         } else {
-          set('El trabajo terminó pero no hay archivo.');
+          const body = await dl.json().catch(() => ({}));
+          set(`El trabajo terminó pero no hay archivo${body?.error?.message ? `: ${body.error.message}` : ''}.`);
         }
         return;
       }
       if (job.state === 'failed') {
-        set(`Fallo: ${job.error || 'desconocido'}`);
+        const msg = job.error?.message || job.error?.code || 'desconocido';
+        set(`Fallo: ${msg}`);
         return;
       }
       if (job.state === 'cancelled') { set('Trabajo cancelado.'); return; }

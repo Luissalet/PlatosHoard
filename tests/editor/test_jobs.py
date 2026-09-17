@@ -84,6 +84,37 @@ class TestWorkerMain:
             jobs_mod._worker_cancel_event = old
         assert result["completed_iterations"] == 10
 
+    def test_export_writes_zip_and_returns_download_path(self, tmp_path):
+        import base64
+        from shapely.geometry import box
+        from shapely.wkb import dumps as wkb_dumps
+
+        geom = box(10, 10, 50, 50)
+        out = tmp_path / "export_test.zip"
+        payload = {
+            "task": "export",
+            "output_path": str(out),
+            "width_mm": 200,
+            "height_mm": 200,
+            "formats": ["svg"],
+            "png_width_px": 100,
+            "project_revision": 1,
+            "plan": [{
+                "layer_id": "L1",
+                "family": "normal_registered",
+                "stem": "normal_registered/00_Square_L1",
+                "extrusion_mm": 3.0,
+                "geom_hex": base64.b64encode(wkb_dumps(geom)).decode("ascii"),
+                "pose": {"tx": 30, "ty": 30, "scale": 1, "angle_deg": 0},
+            }],
+        }
+        result = worker_main(payload)
+        assert result.get("cancelled") is False
+        assert result.get("error") is None
+        assert result["download_path"] == str(out)
+        assert out.is_file()
+        assert out.stat().st_size > 50
+
 
 # ---------------------------------------------------------------------------
 # JobRecord

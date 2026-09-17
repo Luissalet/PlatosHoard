@@ -5,6 +5,13 @@ export function matrix(p) {
   const t=p.angle_deg*Math.PI/180, c=p.scale*Math.cos(t), s=p.scale*Math.sin(t);
   return [c,s,-s,c,p.tx,p.ty];
 }
+/** Horizontal flip in local mm (x → −x). Compose as Pose · Flip. */
+export const FLIP_H = [-1, 0, 0, 1, 0, 0];
+export function layerMatrix(node) {
+  let m = matrix(node.pose);
+  if (node.flip_h) m = multiply(m, FLIP_H);
+  return m;
+}
 export function multiply(A,B) {
   const [a,b,c,d,e,f]=A, [g,h,i,j,k,l]=B;
   return [a*g+c*h,b*g+d*h,a*i+c*j,b*i+d*j,a*k+c*l+e,b*k+d*l+f];
@@ -23,16 +30,52 @@ export function dragPose(startPose,parentWorld,startWorld,nowWorld) {
   const inv=inverse(parentWorld), p0=point(inv,startWorld), p1=point(inv,nowWorld);
   return {...startPose,tx:startPose.tx+p1.x-p0.x,ty:startPose.ty+p1.y-p0.y};
 }
-export function scaleOppositeFixed(startPose,parentWorld,oppositeLocal,draggedLocal,pointerWorld,minScale=1e-6) {
-  const P=point(inverse(parentWorld),pointerWorld);
-  const A=point(matrix(startPose),oppositeLocal);
-  const R=matrix({tx:0,ty:0,scale:1,angle_deg:startPose.angle_deg});
-  const v=point(R,{x:draggedLocal.x-oppositeLocal.x,y:draggedLocal.y-oppositeLocal.y});
-  const n=v.x*v.x+v.y*v.y;
-  if(n<=0) throw new Error('ZERO_SIZED_HANDLE');
-  const scale=Math.max(minScale,((P.x-A.x)*v.x+(P.y-A.y)*v.y)/n);
-  const anchor=point(R,oppositeLocal);
-  return {...startPose,scale,tx:A.x-scale*anchor.x,ty:A.y-scale*anchor.y};
+export function scaleOppositeFixed(startPose, parentWorld, oppositeLocal, draggedLocal, pointerWorld, minScale = 1e-6, flipH = false) {
+  const localOf = (pose) => {
+    let m = matrix(pose);
+    if (flipH) m = multiply(m, FLIP_H);
+    return m;
+  };
+  const P = point(inverse(parentWorld), pointerWorld);
+  const A = point(localOf(startPose), oppositeLocal);
+  // Linear part at scale=1 (rotation ± flip); translation applied via A.
+  const R = localOf({ tx: 0, ty: 0, scale: 1, angle_deg: startPose.angle_deg });
+  const v = point(R, { x: draggedLocal.x - oppositeLocal.x, y: draggedLocal.y - oppositeLocal.y });
+  const n = v.x * v.x + v.y * v.y;
+  if (n <= 0) throw new Error('ZERO_SIZED_HANDLE');
+  const scale = Math.max(minScale, ((P.x - A.x) * v.x + (P.y - A.y) * v.y) / n);
+  const anchor = point(R, oppositeLocal);
+  return { ...startPose, scale, tx: A.x - scale * anchor.x, ty: A.y - scale * anchor.y };
+}
+
+/** Local corners that appear as visual top-left / bottom-right after pose (± flip). */
+export function scaleHandleLocals(localBounds, node, parentWorld = identity()) {
+  const [x0, y0, x1, y1] = localBounds;
+  const corners = [
+    { x: x0, y: y0 },
+    { x: x1, y: y0 },
+    { x: x1, y: y1 },
+    { x: x0, y: y1 },
+  ];
+  const M = multiply(parentWorld, layerMatrix(node));
+  let oppositeLocal = corners[0];
+  let draggedLocal = corners[0];
+  let tlScore = Infinity;
+  let brScore = -Infinity;
+  for (const c of corners) {
+    const w = point(M, c);
+    // Y-down document: TL ≈ min(x+y), BR ≈ max(x+y).
+    const score = w.x + w.y;
+    if (score < tlScore) {
+      tlScore = score;
+      oppositeLocal = c;
+    }
+    if (score > brScore) {
+      brScore = score;
+      draggedLocal = c;
+    }
+  }
+  return { oppositeLocal, draggedLocal };
 }
 export function clientToDocument(svgRoot,event) {
   const m=svgRoot.getScreenCTM();
@@ -316,10 +359,13 @@ function hitCtx() {
  * True iff every (optionally radially padded) child outline sample lies inside
  * the parent SVG contour. Child samples are local-mm; pose maps them to parent-local.
  */
-export function poseInsideParentSilhouette(childLocalPts, pose, parentHit, paddingMm = 0) {
+export function poseInsideParentSilhouette(childLocalPts, pose, parentHit, paddingMm = 0, {
+  flipChild = false,
+  flipParent = false,
+} = {}) {
   const ctx = hitCtx();
   if (!ctx || !parentHit?.path || !childLocalPts?.length) return true;
-  const M = matrix(pose);
+  const M = flipChild ? multiply(matrix(pose), FLIP_H) : matrix(pose);
   const pad = Math.max(0, Number(paddingMm) || 0);
   const cx = pose.tx, cy = pose.ty;
   const toSrc = parentHit.localToSource;
@@ -332,6 +378,8 @@ export function poseInsideParentSilhouette(childLocalPts, pose, parentHit, paddi
         pp = { x: pp.x + (dx / r) * pad, y: pp.y + (dy / r) * pad };
       }
     }
+    // Parent material is Flip(unflipped); q ∈ Flip(S) ⇔ Flip(q) ∈ S.
+    if (flipParent) pp = { x: -pp.x, y: pp.y };
     const sp = point(toSrc, pp);
     if (!ctx.isPointInPath(parentHit.path, sp.x, sp.y)) return false;
   }
@@ -343,18 +391,22 @@ export function poseInsideParentSilhouette(childLocalPts, pose, parentHit, paddi
  * Shrinks about (tx,ty), then walks toward the parent centroid if needed.
  * This is contour containment — not AABB.
  */
-export function clampPoseInsideSilhouette(childAsset, parentAsset, pose, paddingMm = 1) {
+export function clampPoseInsideSilhouette(childAsset, parentAsset, pose, paddingMm = 1, {
+  flipChild = false,
+  flipParent = false,
+} = {}) {
   const childPts = sampleLocalOutline(childAsset, 96);
   const parentPath = localPath2D(parentAsset);
   if (!childPts.length || !parentPath) return { ...pose };
 
+  const opts = { flipChild: !!flipChild, flipParent: !!flipParent };
   let p = {
     tx: Number(pose.tx) || 0,
     ty: Number(pose.ty) || 0,
     scale: Math.max(1e-6, Number(pose.scale) || 1),
     angle_deg: Number(pose.angle_deg) || 0,
   };
-  if (poseInsideParentSilhouette(childPts, p, parentPath, paddingMm)) return p;
+  if (poseInsideParentSilhouette(childPts, p, parentPath, paddingMm, opts)) return p;
 
   const parentPts = sampleLocalOutline(parentAsset, 48);
   let gx = 0, gy = 0;
@@ -363,13 +415,14 @@ export function clampPoseInsideSilhouette(childAsset, parentAsset, pose, padding
     gx /= parentPts.length;
     gy /= parentPts.length;
   }
+  if (opts.flipParent) gx = -gx;
 
   const searchAt = (tx, ty, maxScale) => {
     let lo = 1e-6, hi = Math.max(1e-6, maxScale), best = null;
     for (let i = 0; i < 28; i++) {
       const mid = (lo + hi) / 2;
       const cand = { tx, ty, scale: mid, angle_deg: p.angle_deg };
-      if (poseInsideParentSilhouette(childPts, cand, parentPath, paddingMm)) {
+      if (poseInsideParentSilhouette(childPts, cand, parentPath, paddingMm, opts)) {
         best = cand;
         lo = mid;
       } else {

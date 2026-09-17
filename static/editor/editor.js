@@ -24,14 +24,13 @@ function enableToolbar(hasDoc) {
   }
   for (const id of ['recipe-select', 'export-selected', 'export-batch', 'fit-best', 'fit-at-position',
                     'matrioska-mode', 'view-inverse', 'fit-to-canvas', 'matrioska-stack',
-                    'matrioska-mode-side', 'view-inverse-side', 'fit-to-canvas-side',
-                    'matrioska-padding-enabled', 'matrioska-padding-mm', 'auto-scale-drag']) {
+                    'matrioska-padding-enabled', 'matrioska-padding-mm', 'auto-scale-drag',
+                    'marco-wall-w', 'marco-wall-h', 'marco-padding', 'marco-generate']) {
     const el = $(id);
     if (el) el.disabled = !hasDoc;
   }
   if (hasDoc && $('matrioska-mode') && !$('matrioska-mode').dataset.userTouched) {
     $('matrioska-mode').checked = true;
-    if ($('matrioska-mode-side')) $('matrioska-mode-side').checked = true;
   }
 }
 
@@ -228,9 +227,7 @@ async function nestAndFit(childId, parentId) {
       base_revision: store.revision,
     });
     if ($('matrioska-mode')) $('matrioska-mode').checked = true;
-    if ($('matrioska-mode-side')) $('matrioska-mode-side').checked = true;
     if ($('view-inverse')) $('view-inverse').checked = false;
-    if ($('view-inverse-side')) $('view-inverse-side').checked = false;
     store.matrioskaMode = true;
     refreshAll();
     flash('Matrioska: encajado en la silueta padre.');
@@ -453,9 +450,7 @@ async function stackMatrioska() {
     }
 
     if ($('matrioska-mode')) $('matrioska-mode').checked = true;
-    if ($('matrioska-mode-side')) $('matrioska-mode-side').checked = true;
     if ($('view-inverse')) $('view-inverse').checked = false;
-    if ($('view-inverse-side')) $('view-inverse-side').checked = false;
     store.matrioskaMode = true;
     applyViewMode();
     refreshAll();
@@ -472,6 +467,133 @@ async function stackMatrioska() {
 
 async function fitBest() { return runFit('best'); }
 async function fitAtPosition() { return runFit('at_position'); }
+
+async function generateFrame() {
+  if (!store.doc) { flash('Abre o crea un documento primero.'); return; }
+  const wallW = parseFloat($('marco-wall-w')?.value);
+  const wallH = parseFloat($('marco-wall-h')?.value);
+  const padding = parseFloat($('marco-padding')?.value);
+  if (!(wallW > 0) || !(wallH > 0)) {
+    flash('Ancho y altura de pared deben ser > 0 mm.');
+    return;
+  }
+  if (!(padding >= 0) || !Number.isFinite(padding)) {
+    flash('Padding del marco debe ser ≥ 0 mm.');
+    return;
+  }
+  try {
+    try {
+      await store.commitCommand('generate_frame', {
+        wall_w_mm: wallW,
+        wall_h_mm: wallH,
+        padding_mm: padding,
+      });
+    } catch (err) {
+      // Server without generate_frame yet → build via add_layers.
+      if (!/UNKNOWN_COMMAND/i.test(err.message || '')) throw err;
+      await generateFrameViaAddLayers(wallW, wallH, padding);
+    }
+    refreshAll();
+    requestAnimationFrame(() => viewport.fitToCanvas());
+    flash(`Caja: ancho pared ${wallW} mm, altura ${wallH} mm, padding ${padding} mm.`);
+  } catch (err) {
+    flash(`Marco: ${err.message}`);
+  }
+}
+
+/** Client-side caja (fondo + paredes) when server lacks `generate_frame`. */
+async function generateFrameViaAddLayers(wallW, wallH, padding) {
+  const c = store.doc.canvas;
+  const W = Number(c.width_mm), H = Number(c.height_mm);
+  // Plan: wallW equal on all 4 sides. wallH = Z extrusion of paredes only.
+  const innerW = W + 2 * padding, innerH = H + 2 * padding;
+  const outerW = innerW + 2 * wallW, outerH = innerH + 2 * wallW;
+  const x0 = wallW, y0 = wallW, x1 = wallW + innerW, y1 = wallW + innerH;
+  const dFloor = `M0,0 H${outerW} V${outerH} H0 Z`;
+  const dWalls = `M0,0 H${outerW} V${outerH} H0 Z M${x0},${y0} H${x1} V${y1} H${x0} Z`;
+  const svgFloor = `<svg xmlns="http://www.w3.org/2000/svg" width="${outerW}mm" height="${outerH}mm" viewBox="0 0 ${outerW} ${outerH}"><path d="${dFloor}"/></svg>`;
+  const svgWalls = `<svg xmlns="http://www.w3.org/2000/svg" width="${outerW}mm" height="${outerH}mm" viewBox="0 0 ${outerW} ${outerH}"><path fill-rule="evenodd" d="${dWalls}"/></svg>`;
+  const shaFloor = await sha256Hex(svgFloor);
+  const shaWalls = await sha256Hex(svgWalls);
+  const uid = Date.now().toString(36);
+  const aidFloor = `asset_marco_fondo_${shaFloor.slice(0, 10)}`;
+  const aidWalls = `asset_marco_paredes_${shaWalls.slice(0, 10)}`;
+  const lidFloor = `layer_marco_fondo_${uid}`;
+  const lidWalls = `layer_marco_paredes_${uid}`;
+  const norm = { tx: -outerW / 2, ty: -outerH / 2, scale: 1, angle_deg: 0 };
+  const lb = [-outerW / 2, -outerH / 2, outerW / 2, outerH / 2];
+  const pose = { tx: W / 2, ty: H / 2, scale: 1, angle_deg: 0 };
+
+  const old = Object.values(store.doc.layers || {}).filter(
+    (n) => ['Marco', 'Marco fondo', 'Marco paredes'].includes(n.name)
+      || String(n.id || '').startsWith('layer_marco_'),
+  );
+  for (const n of old) {
+    await store.commitCommand('delete_subtree', {
+      layer_id: n.id,
+      confirm_descendants: 0,
+    });
+  }
+
+  const mkAsset = (id, name, file, sha, svg) => ({
+    id,
+    name,
+    source_filename: file,
+    source_type: 'svg',
+    source_uri: `assets/${id}/source.svg`,
+    canonical_svg_uri: `assets/${id}/canonical.svg`,
+    source_sha256: sha,
+    source_viewbox: [0, 0, outerW, outerH],
+    mm_per_source_unit: 1,
+    normalization_pose: { ...norm },
+    geometry_hash: sha,
+    trace_settings: { kind: name === 'Marco fondo' ? 'procedural_frame_floor' : 'procedural_frame_walls' },
+    curve_tolerance_source: 0.02,
+    local_bounds: [...lb],
+    canonical_svg: svg,
+  });
+
+  await store.commitCommand('add_layers', {
+    assets: [
+      mkAsset(aidFloor, 'Marco fondo', 'marco_fondo.svg', shaFloor, svgFloor),
+      mkAsset(aidWalls, 'Marco paredes', 'marco_paredes.svg', shaWalls, svgWalls),
+    ],
+    layers: [
+      { id: lidFloor, asset_id: aidFloor, name: 'Marco fondo', pose: { ...pose } },
+      { id: lidWalls, asset_id: aidWalls, name: 'Marco paredes', pose: { ...pose } },
+    ],
+  });
+
+  await store.commitCommand('set_layer_properties', {
+    layer_id: lidWalls,
+    extrusion_mm: wallH,
+  });
+
+  const allIds = Object.keys(store.doc.layers || {});
+  const rest = allIds
+    .filter((id) => id !== lidFloor && id !== lidWalls)
+    .sort((a, b) => (store.layerById(a)?.stack_rank ?? 0) - (store.layerById(b)?.stack_rank ?? 0));
+  await store.commitCommand('set_stack_order', { order: [lidFloor, lidWalls, ...rest] });
+  const rootRest = store.roots().map((r) => r.id).filter((id) => id !== lidFloor && id !== lidWalls);
+  await store.commitCommand('reorder_siblings', {
+    parent_id: null,
+    order: [lidFloor, lidWalls, ...rootRest],
+  });
+}
+
+async function sha256Hex(text) {
+  if (globalThis.crypto?.subtle) {
+    const buf = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(text));
+    return [...new Uint8Array(buf)].map((b) => b.toString(16).padStart(2, '0')).join('');
+  }
+  // Fallback: non-crypto hash sufficient for dedup id.
+  let h = 2166136261;
+  for (let i = 0; i < text.length; i++) {
+    h ^= text.charCodeAt(i);
+    h = Math.imul(h, 16777619);
+  }
+  return `fb${(h >>> 0).toString(16).padStart(8, '0')}${'0'.repeat(54)}`;
+}
 
 let viewport, tree, inspector, interactions, exportDialog, viewer3d;
 
@@ -530,59 +652,50 @@ function applyViewMode() {
   else if (mode === 'shell') flash('Vista matrioska aplicada.');
 }
 
-/** Keep toolbar + sidebar checkboxes in sync. */
+/** Wire Vista panel checkboxes (Matrioska / Inversa / Fit canvas). */
 function bindViewToggles() {
-  const pairs = [
-    ['matrioska-mode', 'matrioska-mode-side'],
-    ['view-inverse', 'view-inverse-side'],
-    ['fit-to-canvas', 'fit-to-canvas-side'],
-  ];
-  for (const [a, b] of pairs) {
-    const elA = $(a), elB = $(b);
-    if (!elA || !elB) continue;
-    const sync = async (from, to) => {
-      to.checked = from.checked;
-      if (from.id.includes('matrioska')) {
-        from.dataset.userTouched = '1';
-        to.dataset.userTouched = '1';
-        store.matrioskaMode = !!from.checked;
-        if (from.checked) {
-          if ($('view-inverse')) $('view-inverse').checked = false;
-          if ($('view-inverse-side')) $('view-inverse-side').checked = false;
-          applyViewMode();
-          const layers = Object.values(store.doc?.layers || {});
-          const hasNesting = layers.some((l) => l.parent_id);
-          // Always run the full stack/fit path — works for flat or already-nested trees.
-          if (layers.filter((l) => !l.locked).length >= 2) {
-            await stackMatrioska();
-          } else {
-            flash('Matrioska: importa al menos 2 capas.');
-            refreshAll();
-          }
-          return;
-        }
-      }
-      if (from.id.includes('fit-to-canvas')) {
-        store.fitToCanvas = !!from.checked;
-        if (from.checked) {
-          await applyFitToCanvasAll();
-          refreshAll();
-          return;
-        }
-      }
-      // Inverse and matrioska are mutually exclusive for live view
-      if (from.id.includes('view-inverse') && from.checked) {
-        if ($('matrioska-mode')) $('matrioska-mode').checked = false;
-        if ($('matrioska-mode-side')) $('matrioska-mode-side').checked = false;
-        store.matrioskaMode = false;
-      }
+  const matrioska = $('matrioska-mode');
+  const inverse = $('view-inverse');
+  const fitCanvas = $('fit-to-canvas');
+
+  matrioska?.addEventListener('change', async () => {
+    matrioska.dataset.userTouched = '1';
+    store.matrioskaMode = !!matrioska.checked;
+    if (matrioska.checked) {
+      if (inverse) inverse.checked = false;
       applyViewMode();
-    };
-    elA.addEventListener('change', () => sync(elA, elB));
-    elB.addEventListener('change', () => sync(elB, elA));
-  }
-  store.fitToCanvas = !!$('fit-to-canvas')?.checked;
-  store.matrioskaMode = !!$('matrioska-mode')?.checked;
+      const layers = Object.values(store.doc?.layers || {});
+      if (layers.filter((l) => !l.locked).length >= 2) {
+        await stackMatrioska();
+      } else {
+        flash('Matrioska: importa al menos 2 capas.');
+        refreshAll();
+      }
+      return;
+    }
+    applyViewMode();
+  });
+
+  fitCanvas?.addEventListener('change', async () => {
+    store.fitToCanvas = !!fitCanvas.checked;
+    if (fitCanvas.checked) {
+      await applyFitToCanvasAll();
+      refreshAll();
+      return;
+    }
+    applyViewMode();
+  });
+
+  inverse?.addEventListener('change', () => {
+    if (inverse.checked) {
+      if (matrioska) matrioska.checked = false;
+      store.matrioskaMode = false;
+    }
+    applyViewMode();
+  });
+
+  store.fitToCanvas = !!fitCanvas?.checked;
+  store.matrioskaMode = !!matrioska?.checked;
 }
 
 async function boot() {
@@ -679,6 +792,7 @@ async function boot() {
   $('fit-best').addEventListener('click', fitBest);
   $('fit-at-position').addEventListener('click', fitAtPosition);
   $('matrioska-stack')?.addEventListener('click', stackMatrioska);
+  $('marco-generate')?.addEventListener('click', generateFrame);
   for (const id of ['canvas-width-mm', 'canvas-height-mm', 'canvas-padding-top',
                     'canvas-padding-right', 'canvas-padding-bottom', 'canvas-padding-left']) {
     $(id).addEventListener('change', applyCanvas);
@@ -688,7 +802,6 @@ async function boot() {
     // Selecting "Inversa" in export auto-applies the live inverse view.
     if (v === 'inverse_registered') {
       if ($('view-inverse')) $('view-inverse').checked = true;
-      if ($('view-inverse-side')) $('view-inverse-side').checked = true;
     }
     exportDialog.updateCounter();
     applyViewMode();

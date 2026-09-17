@@ -55,44 +55,75 @@ export class Viewport2D {
   // ---- layers -------------------------------------------------------------
 
   renderLayers() {
-    this.content.innerHTML = '';
-    this.defs.innerHTML = '';
-    this._layerEls.clear();
-    if (!store.doc) return;
-
-    const mode = store.viewMode || 'normal';
-    if (mode === 'inverse') {
-      this._renderInverseMode();
-      this.renderSelection();
+    if (!store.doc) {
+      this.content.innerHTML = '';
+      this.defs.innerHTML = '';
+      this._layerEls.clear();
       return;
     }
 
-    // Matrioska and normal: solid stack, parents under children (children on top).
-    // Do NOT punch holes here — holes are inversa/export only; masking hid children.
-    const ordered = this._drawOrder();
-    for (const layerId of ordered) {
-      const node = store.layerById(layerId);
-      if (!node) continue;
-      if (!this._effectiveVisible(node)) continue;
-      const g = this._renderLayer(layerId, node);
-      if (g) {
-        this.content.appendChild(g);
-        this._layerEls.set(layerId, g);
+    const mode = store.viewMode || 'normal';
+    const frag = document.createDocumentFragment();
+    const defsFrag = document.createDocumentFragment();
+    const nextEls = new Map();
+
+    try {
+      if (mode === 'inverse') {
+        // Draw order: Marco fondo (bottom) → inverse plates → Marco paredes.
+        // Frame is never inverted and never flipped in stack with content.
+        const frameNodes = this._drawOrder()
+          .map((id) => store.layerById(id))
+          .filter((n) => n && this._effectiveVisible(n) && this._isFrameLayer(n));
+        const fondos = frameNodes.filter((n) => (n.name || '').includes('fondo') || (n.name || '') === 'Marco');
+        const paredes = frameNodes.filter((n) => (n.name || '').includes('paredes'));
+        const otherFrame = frameNodes.filter((n) => !fondos.includes(n) && !paredes.includes(n));
+        for (const node of [...fondos, ...otherFrame]) {
+          const g = this._renderLayer(node.id, node);
+          if (g) { frag.appendChild(g); nextEls.set(node.id, g); }
+        }
+        this._buildInverseMode(frag, defsFrag, nextEls);
+        for (const node of paredes) {
+          const g = this._renderLayer(node.id, node);
+          if (g) { frag.appendChild(g); nextEls.set(node.id, g); }
+        }
+      } else {
+        // Matrioska and normal: solid stack, parents under children (children on top).
+        const ordered = this._drawOrder();
+        for (const layerId of ordered) {
+          const node = store.layerById(layerId);
+          if (!node) continue;
+          if (!this._effectiveVisible(node)) continue;
+          const g = this._renderLayer(layerId, node);
+          if (g) {
+            frag.appendChild(g);
+            nextEls.set(layerId, g);
+          }
+        }
       }
+    } catch (err) {
+      console.error('renderLayers failed', err);
+      return; // keep previous content instead of blanking the canvas
     }
+
+    this.content.innerHTML = '';
+    this.defs.innerHTML = '';
+    this._layerEls.clear();
+    this.defs.appendChild(defsFrag);
+    this.content.appendChild(frag);
+    for (const [id, el] of nextEls) this._layerEls.set(id, el);
     this.renderSelection();
   }
 
   /** Plancha del canvas con hueco = solo esta capa (hijos = otras planchas). */
-  _renderInverseMode() {
+  _buildInverseMode(frag, defsFrag, nextEls) {
     const c = store.doc.canvas;
     const W = c.width_mm, H = c.height_mm;
-    // One independent plate per visible layer — never mix children into the hole.
     const targets = this._drawOrder();
 
     for (const layerId of targets) {
       const node = store.layerById(layerId);
       if (!node || !this._effectiveVisible(node)) continue;
+      if (this._isFrameLayer(node)) continue; // rendered as normal ring after
       const asset = store.assetById(node.asset_id);
       if (!asset?.canonical_svg) continue;
 
@@ -105,15 +136,15 @@ export class Viewport2D {
       mask.appendChild(keep);
       const hole = this._pathsGroup(layerId, asset, '#000000');
       if (hole) mask.appendChild(hole);
-      this.defs.appendChild(mask);
+      defsFrag.appendChild(mask);
 
       const plate = this._rect(0, 0, W, H, 'layer inverse-plate');
       plate.dataset.layerId = layerId;
       plate.setAttribute('fill', this._layerColor(layerId));
       plate.setAttribute('mask', `url(#${maskId})`);
       plate.style.opacity = targets.length > 1 ? '0.55' : '0.92';
-      this.content.appendChild(plate);
-      this._layerEls.set(layerId, plate);
+      frag.appendChild(plate);
+      nextEls.set(layerId, plate);
     }
   }
 
@@ -132,6 +163,12 @@ export class Viewport2D {
       g.appendChild(p);
     }
     return g.childNodes.length ? g : null;
+  }
+
+  _isFrameLayer(node) {
+    const name = node?.name || '';
+    return name === 'Marco' || name === 'Marco fondo' || name === 'Marco paredes'
+      || String(node?.id || '').startsWith('layer_marco_');
   }
 
   _drawOrder() {
@@ -203,7 +240,15 @@ export class Viewport2D {
       seen.add(cur);
       const node = store.layerById(cur);
       if (!node) break;
-      chain.unshift(affine.matrix(node.pose));
+      // Prefer layerMatrix (pose · flip_h); fall back if cache is stale.
+      let lm;
+      if (typeof affine.layerMatrix === 'function') {
+        lm = affine.layerMatrix(node);
+      } else {
+        lm = affine.matrix(node.pose);
+        if (node.flip_h) lm = affine.multiply(lm, [-1, 0, 0, 1, 0, 0]);
+      }
+      chain.unshift(lm);
       cur = node.parent_id;
     }
     let m = affine.identity();
@@ -288,8 +333,12 @@ export class Viewport2D {
     g.appendChild(poly);
 
     const handle = document.createElementNS(SVG_NS, 'rect');
-    handle.setAttribute('x', bb.x + bb.width - 4);
-    handle.setAttribute('y', bb.y + bb.height - 4);
+    // Place the scale handle on the visual bottom-right after flip:
+    // with flip_h, local +X becomes visual −X, so use the local left edge.
+    const hx = node.flip_h ? (bb.x - 4) : (bb.x + bb.width - 4);
+    const hy = bb.y + bb.height - 4;
+    handle.setAttribute('x', hx);
+    handle.setAttribute('y', hy);
     handle.setAttribute('width', 8);
     handle.setAttribute('height', 8);
     handle.setAttribute('fill', '#2563eb');
@@ -299,6 +348,15 @@ export class Viewport2D {
     handle.dataset.handle = 'scale';
     handle.style.cursor = 'nwse-resize';
     handle.style.pointerEvents = 'auto';
+    // Keep the handle square on screen: cancel the layer's local flip.
+    if (node.flip_h) {
+      const cx = hx + 4;
+      const cy = hy + 4;
+      handle.setAttribute(
+        'transform',
+        `translate(${cx} ${cy}) scale(-1 1) translate(${-cx} ${-cy})`,
+      );
+    }
     g.appendChild(handle);
 
     this.handles.appendChild(g);

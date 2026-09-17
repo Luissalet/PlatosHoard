@@ -38,7 +38,7 @@ from shapely.geometry import Polygon, MultiPolygon, GeometryCollection, box
 from shapely.geometry.base import BaseGeometry
 from shapely.ops import unary_union
 
-from .transforms import Pose, apply_pose, world_pose
+from .transforms import Pose, apply_flip_h, apply_pose, world_pose
 from .constraints import (
     ConstraintError, canvas_shape, inner_canvas, polygon_parts, material,
     require_shape,
@@ -147,6 +147,8 @@ def _layer_world_geometry(doc: Mapping[str, Any], layer_id: str) -> BaseGeometry
         k = float(asset.get("mm_per_source_unit") or 1.0)
         geom, _ = normalize_asset(raw, k)
         asset["_geometry_local"] = geom
+    if node.get("flip_h"):
+        geom = apply_flip_h(geom)
     return apply_pose(geom, world_pose(layer_id, layers))
 
 
