@@ -4,19 +4,22 @@
   <meta charset="utf-8"/>
   <meta name="viewport" content="width=device-width, initial-scale=1"/>
   <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate"/>
-  <title>Silhouettes — Editor de capas</title>
-  <link rel="stylesheet" href="/static/editor/editor.css?v=20260917b"/>
+  <title>Plato's Hoard — Editor de capas</title>
+<link rel="icon" href="/static/favicon.ico" sizes="any">
+<link rel="icon" type="image/png" sizes="192x192" href="/static/icon-192.png">
+<link rel="apple-touch-icon" href="/static/apple-touch-icon.png">
+  <link rel="stylesheet" href="/static/editor/editor.css?v=20260917n"/>
   <script type="importmap">
   {
     "imports": {
-      "/static/editor/store.js": "/static/editor/store.js?v=20260917b",
-      "/static/editor/affine.mjs": "/static/editor/affine.mjs?v=20260917b",
-      "/static/editor/viewport2d.js": "/static/editor/viewport2d.js?v=20260917b",
-      "/static/editor/layer_tree.js": "/static/editor/layer_tree.js?v=20260917b",
-      "/static/editor/inspector.js": "/static/editor/inspector.js?v=20260917b",
-      "/static/editor/interactions2d.js": "/static/editor/interactions2d.js?v=20260917b",
-      "/static/editor/export_dialog.js": "/static/editor/export_dialog.js?v=20260917b",
-      "/static/editor/viewer3d.mjs": "/static/editor/viewer3d.mjs?v=20260917b"
+      "/static/editor/store.js": "/static/editor/store.js?v=20260917n",
+      "/static/editor/affine.mjs": "/static/editor/affine.mjs?v=20260917n",
+      "/static/editor/viewport2d.js": "/static/editor/viewport2d.js?v=20260917n",
+      "/static/editor/layer_tree.js": "/static/editor/layer_tree.js?v=20260917n",
+      "/static/editor/inspector.js": "/static/editor/inspector.js?v=20260917n",
+      "/static/editor/interactions2d.js": "/static/editor/interactions2d.js?v=20260917n",
+      "/static/editor/export_dialog.js": "/static/editor/export_dialog.js?v=20260917n",
+      "/static/editor/viewer3d.mjs": "/static/editor/viewer3d.mjs?v=20260917n"
     }
   }
   </script>
@@ -24,110 +27,90 @@
 <body class="editor-shell">
   <header id="document-toolbar" class="editor-toolbar" role="toolbar" aria-label="Documento">
     <div class="toolbar-group">
-      <button type="button" id="editor-new" disabled>Nuevo</button>
-      <button type="button" id="editor-save" disabled>Guardar</button>
-      <button type="button" id="editor-open" disabled>Abrir</button>
-      <button type="button" id="editor-undo" disabled>Deshacer</button>
-      <button type="button" id="editor-redo" disabled>Rehacer</button>
+      <span class="brand">Silhouettes</span>
+      <button type="button" id="editor-new" class="btn-ghost" disabled>Nuevo</button>
+      <button type="button" id="editor-open" class="btn-ghost" disabled>Abrir</button>
+      <button type="button" id="editor-save" class="btn-ghost" disabled>Guardar</button>
+      <span class="toolbar-sep"></span>
+      <button type="button" id="editor-undo" class="btn-ghost" disabled title="Ctrl+Z">Deshacer</button>
+      <button type="button" id="editor-redo" class="btn-ghost" disabled title="Ctrl+Y">Rehacer</button>
     </div>
-    <div class="toolbar-group canvas-controls" aria-label="Canvas">
-      <label>Ancho <input id="canvas-width-mm" type="number" min="1" step="0.1" value="200" disabled/></label>
-      <label>Alto <input id="canvas-height-mm" type="number" min="1" step="0.1" value="200" disabled/></label>
-      <label>Sup <input id="canvas-padding-top" type="number" min="0" step="0.1" value="5" disabled/></label>
-      <label>Dere <input id="canvas-padding-right" type="number" min="0" step="0.1" value="5" disabled/></label>
-      <label>Inf <input id="canvas-padding-bottom" type="number" min="0" step="0.1" value="5" disabled/></label>
-      <label>Izq <input id="canvas-padding-left" type="number" min="0" step="0.1" value="5" disabled/></label>
+    <div class="toolbar-group canvas-controls" aria-label="Lienzo">
+      <span class="toolbar-label">Lienzo (mm)</span>
+      <label>Ancho <input id="canvas-width-mm" type="number" min="1" step="1" value="200" disabled/></label>
+      <label>Alto <input id="canvas-height-mm" type="number" min="1" step="1" value="200" disabled/></label>
+      <span class="toolbar-label">Margen</span>
+      <label title="Superior"><span class="dir">↑</span><input id="canvas-padding-top" type="number" min="0" step="0.5" value="5" disabled/></label>
+      <label title="Derecho"><span class="dir">→</span><input id="canvas-padding-right" type="number" min="0" step="0.5" value="5" disabled/></label>
+      <label title="Inferior"><span class="dir">↓</span><input id="canvas-padding-bottom" type="number" min="0" step="0.5" value="5" disabled/></label>
+      <label title="Izquierdo"><span class="dir">←</span><input id="canvas-padding-left" type="number" min="0" step="0.5" value="5" disabled/></label>
     </div>
     <div class="toolbar-group">
-      <label class="file-label">Importar
-        <input id="import-files" type="file" multiple accept=".png,.svg,image/png,image/svg+xml" disabled/>
-      </label>
       <a class="link" href="/" target="_blank" rel="noreferrer">Vista antigua</a>
     </div>
   </header>
 
   <main class="editor-main">
-    <aside class="editor-left" aria-label="Capas">
+    <aside class="editor-left" aria-label="Flujo">
       <div class="panel-resizer panel-resizer-left" role="separator" aria-orientation="vertical"></div>
 
-      <section class="panel panel-vista">
-        <h2>Vista</h2>
-        <div class="vista-list">
-          <label class="vista-row" title="Como Fit canvas, pero encaja cada hijo al máximo dentro de la silueta padre">
-            <input id="matrioska-mode" type="checkbox" checked disabled/>
-            <span class="vista-title">Matrioska</span>
-            <span class="vista-desc">Fit a silueta + hijo encima</span>
-          </label>
-          <label class="vista-row" title="Plancha con huecos en 2D y 3D">
-            <input id="view-inverse" type="checkbox" disabled/>
-            <span class="vista-title">Inversa</span>
-            <span class="vista-desc">Plancha con huecos</span>
-          </label>
-          <label class="vista-row" title="Escala máxima al padding; no permite salir del lienzo">
-            <input id="fit-to-canvas" type="checkbox" disabled/>
-            <span class="vista-title">Fit canvas</span>
-            <span class="vista-desc">Máximo tamaño / clamping</span>
-          </label>
-        </div>
-        <p class="hint" id="view-mode-hint">Modo: normal</p>
-        <div class="marco-box" aria-label="Marco alrededor de inversa">
-          <div class="marco-title">Marco (caja)</div>
-          <p class="hint">Fondo + 4 paredes iguales. Ancho = grosor en planta; altura = extrusión de las paredes.</p>
-          <label class="insp-row">Ancho pared (mm)
-            <input id="marco-wall-w" type="number" min="0.1" step="0.5" value="12" disabled title="Grosor igual en los 4 lados"/>
-          </label>
-          <label class="insp-row">Altura paredes (mm)
-            <input id="marco-wall-h" type="number" min="0.1" step="0.5" value="12" disabled title="Altura Z de las 4 paredes"/>
-          </label>
-          <label class="insp-row">Padding (mm)
-            <input id="marco-padding" type="number" min="0" step="0.5" value="1" disabled/>
-          </label>
-          <div class="button-row">
-            <button type="button" id="marco-generate" disabled title="Genera o reemplaza la capa Marco">Generar marco</button>
-          </div>
-        </div>
-      </section>
-
-      <section class="panel">
-        <h2>Capas</h2>
-        <p class="hint" id="layers-hint">Matrioska = fit dentro del padre. Suelta una capa sobre otra para anidar; luego Activa Matrioska o usa Apilar.</p>
-        <div class="button-row">
-          <button type="button" id="matrioska-stack" disabled title="Anida raíces de mayor a menor y encaja">Apilar matrioska</button>
-        </div>
-        <label class="checkbox-row" title="Deja un margen entre el contorno del hijo y el del padre">
-          <input id="matrioska-padding-enabled" type="checkbox" disabled/>
-          Padding hijo↔padre
-          <input id="matrioska-padding-mm" type="number" min="0" step="0.5" value="2" disabled title="mm de holgura"/>
-          <span class="unit">mm</span>
+      <section class="panel step-panel">
+        <h2><span class="step-num">1</span> Fotos</h2>
+        <label class="dropzone" id="dropzone" for="import-files" title="PNG o SVG. Se apilan solas de mayor a menor.">
+          <input id="import-files" type="file" multiple accept=".png,.svg,image/png,image/svg+xml" disabled/>
+          <span class="dz-icon">⤓</span>
+          <span class="dz-title">Arrastra PNG / SVG aquí</span>
+          <span class="dz-sub">o haz clic para elegir · se apilan y encajan solas</span>
         </label>
         <div id="layer-tree" class="layer-tree" aria-live="polite">
-          <p class="empty-state">Sin capas. Importa PNG/SVG.</p>
+          <p class="empty-state">Sin capas.</p>
         </div>
+        <p class="hint">Arrastra una fila sobre otra para cambiar quién va dentro de quién. Los hijos se escalan al máximo al moverlos.</p>
       </section>
 
-      <section class="panel">
-        <h2>Exportar</h2>
-        <select id="recipe-select" disabled>
-          <option value="batch_all" selected>Lote completo (4 familias + marco)</option>
-          <option value="normal_registered">Sólida anidada</option>
-          <option value="inverse_registered">Inversa anidada</option>
-          <option value="normal_fullframe">Sólida fit canvas</option>
-          <option value="inverse_fullframe">Inversa fit canvas</option>
-        </select>
-        <div class="button-row">
-          <button type="button" id="export-selected" disabled>Exportar selección</button>
-          <button type="button" id="export-batch" disabled>Exportar lote</button>
+      <section class="panel step-panel">
+        <h2><span class="step-num">2</span> Encaje y marco</h2>
+        <div class="field-grid">
+          <label class="field" title="Holgura entre el contorno del hijo y el del padre">
+            <span>Holgura hijo↔padre</span>
+            <span class="field-input"><input id="matrioska-padding-mm" type="number" min="0" step="0.5" value="2" disabled/><span class="unit">mm</span></span>
+          </label>
+          <label class="field" title="Grosor de la pared en planta, igual en los 4 lados">
+            <span>Pared del marco</span>
+            <span class="field-input"><input id="marco-wall-w" type="number" min="0.1" step="0.5" value="12" disabled/><span class="unit">mm</span></span>
+          </label>
+          <label class="field" title="Altura total de la bandeja (Z)">
+            <span>Altura del marco</span>
+            <span class="field-input"><input id="marco-wall-h" type="number" min="0.1" step="0.5" value="12" disabled/><span class="unit">mm</span></span>
+          </label>
+          <label class="field" title="Holgura entre el lienzo y la pared interior">
+            <span>Holgura lienzo↔marco</span>
+            <span class="field-input"><input id="marco-padding" type="number" min="0" step="0.5" value="1" disabled/><span class="unit">mm</span></span>
+          </label>
         </div>
-      </section>
-
-      <section class="panel">
-        <h2>Ajuste</h2>
         <div class="button-row">
-          <button type="button" id="fit-best" disabled>Buscar mejor posición</button>
-          <button type="button" id="fit-at-position" disabled>Ajustar en posición</button>
+          <button type="button" id="matrioska-stack" class="btn-secondary" disabled title="Re-anida de mayor a menor y vuelve a encajar todo">Re-apilar todo</button>
+          <button type="button" id="fit-best" class="btn-secondary" disabled title="Busca la mejor posición y escala de la capa seleccionada">Mejor posición</button>
         </div>
-        <label class="checkbox-row"><input id="auto-scale-drag" type="checkbox" disabled/> Escala automática al mover</label>
         <div id="fit-status" class="fit-status" aria-live="polite"></div>
+      </section>
+
+      <section class="panel step-panel">
+        <h2><span class="step-num">3</span> Exportar</h2>
+        <button type="button" id="export-batch" class="btn-primary btn-big" disabled title="Sólida anidada, inversa anidada, sólida fit lienzo, inversa fit lienzo + marco">Generar 4 STL</button>
+        <div class="export-options">
+          <label class="checkbox-row"><input id="export-fmt-svg" type="checkbox" disabled/> + SVG</label>
+          <label class="checkbox-row"><input id="export-fmt-png" type="checkbox" disabled/> + PNG</label>
+          <select id="recipe-select" disabled title="Familia para la exportación de la selección">
+            <option value="batch_all" selected>Las 4 familias</option>
+            <option value="normal_registered">Sólida anidada</option>
+            <option value="inverse_registered">Inversa anidada</option>
+            <option value="normal_fullframe">Sólida fit lienzo</option>
+            <option value="inverse_fullframe">Inversa fit lienzo</option>
+          </select>
+          <button type="button" id="export-selected" class="btn-ghost" disabled>Solo selección</button>
+        </div>
+        <div id="export-status" class="fit-status" aria-live="polite"></div>
       </section>
     </aside>
 
@@ -143,13 +126,17 @@
 
     <aside class="editor-right" aria-label="Inspector y 3D">
       <div class="panel-resizer panel-resizer-right" role="separator" aria-orientation="vertical"></div>
+      <section class="panel viewer-panel">
+        <h2>3D · Sólida (matrioska)</h2>
+        <div id="viewer-3d" class="viewer-3d"></div>
+      </section>
+      <section class="panel viewer-panel">
+        <h2>3D · Inversa (huecos)</h2>
+        <div id="viewer-3d-inverse" class="viewer-3d"></div>
+      </section>
       <section class="panel" id="inspector">
         <h2>Inspector</h2>
         <p class="empty-state">Sin selección.</p>
-      </section>
-      <section class="panel viewer-panel">
-        <h2>Montaje 3D</h2>
-        <div id="viewer-3d" class="viewer-3d"></div>
       </section>
       <section class="panel errors-panel">
         <h2>Errores</h2>
@@ -160,6 +147,6 @@
 
   <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/build/three.min.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/controls/OrbitControls.js"></script>
-  <script type="module" src="/static/editor/editor.js?v=20260917b"></script>
+  <script type="module" src="/static/editor/editor.js?v=20260917n"></script>
 </body>
 </html>

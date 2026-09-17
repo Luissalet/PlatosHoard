@@ -58,7 +58,10 @@ HTML_TEMPLATE = """
 <html lang="en">
 <head>
 <meta charset="utf-8"/>
-<title>Silhouette 3D</title>
+<title>Plato's Hoard</title>
+<link rel="icon" href="/static/favicon.ico" sizes="any">
+<link rel="icon" type="image/png" sizes="192x192" href="/static/icon-192.png">
+<link rel="apple-touch-icon" href="/static/apple-touch-icon.png">
 <style>
   :root {
     --bg: #0f1115;
