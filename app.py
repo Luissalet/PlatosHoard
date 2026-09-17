@@ -15,7 +15,7 @@ import base64
 import mimetypes
 import multiprocessing
 from pathlib import Path
-from flask import Flask, request, jsonify, render_template, render_template_string
+from flask import Flask, request, jsonify, render_template, render_template_string, redirect
 
 # Browsers enforce strict MIME checking for <script type="module">.
 # Flask's default map has no entry for .mjs (served as text/plain), which
@@ -730,6 +730,12 @@ HTML_TEMPLATE = """
 
 @app.route("/")
 def index():
+    # The layer editor is the app; the original single-shot page stays reachable at /legacy.
+    return redirect("/editor", code=302)
+
+
+@app.route("/legacy")
+def legacy():
     return render_template_string(HTML_TEMPLATE)
 
 
