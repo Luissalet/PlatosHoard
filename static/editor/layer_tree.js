@@ -22,6 +22,17 @@ function displayName(layer) {
   return layer?.name || layer?.id || '?';
 }
 
+/** Non-blocking status line (window.alert freezes the whole app shell). */
+function flash(msg) {
+  const el = document.getElementById('fit-status');
+  if (el) {
+    el.textContent = msg;
+    setTimeout(() => { if (el.textContent === msg) el.textContent = ''; }, 4000);
+  } else {
+    console.warn(msg);
+  }
+}
+
 export class LayerTree {
   /**
    * @param {HTMLElement} container
@@ -45,19 +56,14 @@ export class LayerTree {
       this._appendNode(root, 0);
     }
 
-    // Drop on empty panel → make root (end of root list)
-    this.el.addEventListener('dragover', (e) => {
-      if (!this._dragId) return;
-      if (e.target.closest?.('.tree-row')) return;
-      e.preventDefault();
-      e.dataTransfer.dropEffect = 'move';
-    });
-    this.el.addEventListener('drop', (e) => {
-      if (e.target.closest?.('.tree-row')) return;
-      e.preventDefault();
-      const fromId = this._dragId || e.dataTransfer.getData('text/plain');
-      if (fromId) this._dropAsRoot(fromId);
-    });
+    // Always-present target: the list shrink-wraps its rows, so without this
+    // strip there is no empty area to drop on and nothing could be pulled
+    // back out to the top level.
+    const rootZone = document.createElement('div');
+    rootZone.className = 'tree-root-zone';
+    rootZone.textContent = 'Soltar aquí para sacar al nivel superior';
+    this.el.appendChild(rootZone);
+
   }
 
   _appendNode(layer, depth) {
@@ -65,41 +71,7 @@ export class LayerTree {
     row.className = 'tree-row' + (layer.id === store.selectedId ? ' selected' : '');
     row.dataset.layerId = layer.id;
     row.style.paddingLeft = `${8 + depth * 16}px`;
-    row.draggable = true;
-
-    row.addEventListener('dragstart', (e) => {
-      this._dragId = layer.id;
-      e.dataTransfer.setData('text/plain', layer.id);
-      e.dataTransfer.effectAllowed = 'move';
-      row.classList.add('dragging');
-    });
-    row.addEventListener('dragend', () => {
-      this._dragId = null;
-      row.classList.remove('dragging');
-      this.el.querySelectorAll('.drop-before,.drop-after,.drop-into')
-        .forEach((el) => el.classList.remove('drop-before', 'drop-after', 'drop-into'));
-      document.querySelector('.editor-main')?.classList.remove('drop-active');
-    });
-    row.addEventListener('dragover', (e) => {
-      e.preventDefault();
-      e.stopPropagation();
-      e.dataTransfer.dropEffect = 'move';
-      const zone = this._dropZone(row, e);
-      row.classList.remove('drop-before', 'drop-after', 'drop-into');
-      row.classList.add(`drop-${zone}`);
-    });
-    row.addEventListener('dragleave', () => {
-      row.classList.remove('drop-before', 'drop-after', 'drop-into');
-    });
-    row.addEventListener('drop', (e) => {
-      e.preventDefault();
-      e.stopPropagation();
-      row.classList.remove('drop-before', 'drop-after', 'drop-into');
-      const fromId = this._dragId || e.dataTransfer.getData('text/plain');
-      if (!fromId || fromId === layer.id) return;
-      const zone = this._dropZone(row, e);
-      this._handleDrop(fromId, layer.id, zone);
-    });
+    this._bindDrag(row, layer);
 
     const eye = document.createElement('button');
     eye.type = 'button';
@@ -125,7 +97,6 @@ export class LayerTree {
     name.className = 'tree-name';
     name.textContent = displayName(layer);
     name.title = displayName(layer);
-    name.addEventListener('click', () => this._select(layer.id));
     row.appendChild(name);
 
     if (layer.locked) {
@@ -152,90 +123,183 @@ export class LayerTree {
     }
   }
 
-  /** With Matrioska on: whole row nests (Shift = reorder by edge). */
-  _dropZone(row, e) {
-    const matrioska = !!this._opts.matrioska?.();
-    if (matrioska && !e.shiftKey) return 'into';
-    const r = row.getBoundingClientRect();
-    const y = e.clientY - r.top;
-    const frac = y / Math.max(1, r.height);
-    const edge = 0.28;
-    if (frac < edge) return 'before';
-    if (frac > 1 - edge) return 'after';
-    return 'into';
+  // ------------------------------------------------------------------
+  // Reordering by dragging (pointer events, not HTML5 drag-and-drop:
+  // native DnD is unreliable inside the app shell and gave no way out of
+  // a nest once matrioska forced every drop to "into").
+  //
+  //   row top 30%     → place BEFORE the target, as its sibling
+  //   row bottom 30%  → place AFTER the target, as its sibling
+  //   row middle 40%  → nest INSIDE the target
+  //   empty panel area→ move to the top level (root)
+  // ------------------------------------------------------------------
+
+  _bindDrag(row, layer) {
+    row.draggable = false;
+    row.addEventListener('pointerdown', (e) => {
+      if (e.button !== 0) return;
+      if (e.target.closest?.('button')) return;      // eye / delete own their clicks
+      e.preventDefault();
+      const start = { x: e.clientX, y: e.clientY };
+      const movable = !layer.locked;
+      let started = false;
+
+      const onMove = (ev) => {
+        if (!movable) return;
+        if (!started) {
+          if (Math.hypot(ev.clientX - start.x, ev.clientY - start.y) < 4) return;
+          started = true;
+          this._dragStart(layer.id, row);
+        }
+        this._dragOver(ev);
+      };
+      const finish = (commit) => {
+        window.removeEventListener('pointermove', onMove);
+        window.removeEventListener('pointerup', onUp);
+        window.removeEventListener('pointercancel', onCancel);
+        window.removeEventListener('keydown', onKey, true);
+        if (!started) { this._select(layer.id); return; }
+        const drop = this._drop;
+        this._dragEnd();
+        if (commit && drop) this._applyMove(layer.id, drop.targetId, drop.zone);
+      };
+      const onUp = () => finish(true);
+      const onCancel = () => finish(false);
+      const onKey = (ev) => {
+        if (ev.key !== 'Escape') return;
+        ev.preventDefault();
+        finish(false);
+      };
+
+      window.addEventListener('pointermove', onMove);
+      window.addEventListener('pointerup', onUp);
+      window.addEventListener('pointercancel', onCancel);
+      window.addEventListener('keydown', onKey, true);
+    });
   }
 
-  async _handleDrop(fromId, targetId, zone) {
-    if (store.isAncestor(fromId, targetId)) {
-      window.alert('No se puede anidar una capa dentro de sí misma.');
+  _dragStart(layerId, row) {
+    this._dragId = layerId;
+    this._drop = null;
+    row.classList.add('dragging');
+    document.body.classList.add('tree-dragging');
+    const ghost = document.createElement('div');
+    ghost.className = 'tree-drag-ghost';
+    ghost.textContent = displayName(store.layerById(layerId));
+    document.body.appendChild(ghost);
+    this._ghost = ghost;
+  }
+
+  _clearIndicators() {
+    this.el.querySelectorAll('.drop-before,.drop-after,.drop-into')
+      .forEach((el) => el.classList.remove('drop-before', 'drop-after', 'drop-into'));
+    this.el.classList.remove('drop-root');
+    this.el.querySelector('.tree-root-zone')?.classList.remove('active');
+  }
+
+  _dragOver(ev) {
+    if (!this._dragId) return;
+    if (this._ghost) {
+      this._ghost.style.left = `${ev.clientX + 14}px`;
+      this._ghost.style.top = `${ev.clientY + 14}px`;
+    }
+    this._clearIndicators();
+    this._autoScroll(ev);
+
+    const row = document.elementFromPoint(ev.clientX, ev.clientY)?.closest?.('.tree-row');
+    const targetId = row?.dataset?.layerId;
+    if (targetId && targetId !== this._dragId && !store.isAncestor(this._dragId, targetId)) {
+      const target = store.layerById(targetId);
+      const r = row.getBoundingClientRect();
+      const frac = (ev.clientY - r.top) / Math.max(1, r.height);
+      let zone = frac < 0.3 ? 'before' : (frac > 0.7 ? 'after' : 'into');
+      // Nothing nests inside the marco (or any locked layer).
+      if (zone === 'into' && target?.locked) zone = frac < 0.5 ? 'before' : 'after';
+      row.classList.add(`drop-${zone}`);
+      this._drop = { targetId, zone };
       return;
     }
-    const target = store.layerById(targetId);
-    if (!target) return;
+    const el = document.elementFromPoint(ev.clientX, ev.clientY);
+    if (el?.closest?.('.tree-root-zone') || this._pointerInPanel(ev)) {
+      this.el.classList.add('drop-root');
+      this.el.querySelector('.tree-root-zone')?.classList.add('active');
+      this._drop = { targetId: null, zone: 'root' };
+      return;
+    }
+    this._drop = null;
+  }
+
+  _pointerInPanel(ev) {
+    const r = this.el.getBoundingClientRect();
+    return ev.clientX >= r.left && ev.clientX <= r.right
+      && ev.clientY >= r.top && ev.clientY <= r.bottom;
+  }
+
+  _autoScroll(ev) {
+    const r = this.el.getBoundingClientRect();
+    const margin = 24;
+    if (ev.clientY < r.top + margin) this.el.scrollTop -= 10;
+    else if (ev.clientY > r.bottom - margin) this.el.scrollTop += 10;
+  }
+
+  _dragEnd() {
+    this._clearIndicators();
+    this.el.querySelectorAll('.dragging').forEach((el) => el.classList.remove('dragging'));
+    document.body.classList.remove('tree-dragging');
+    this._ghost?.remove();
+    this._ghost = null;
+    this._dragId = null;
+    this._drop = null;
+  }
+
+  /**
+   * Apply a drop.  ``zone``: 'into' | 'before' | 'after' | 'root'.
+   * Reparenting preserves the world pose server-side; the onNest / onUnnest
+   * hooks then re-fit the moved subtree.
+   */
+  async _applyMove(fromId, targetId, zone) {
+    const from = store.layerById(fromId);
+    if (!from) return;
+    if (targetId && (targetId === fromId || store.isAncestor(fromId, targetId))) return;
+
+    let newParent;
+    if (zone === 'into') newParent = targetId;
+    else if (zone === 'root') newParent = null;
+    else newParent = store.layerById(targetId)?.parent_id ?? null;
+
+    const oldParent = from.parent_id ?? null;
+    if (newParent === oldParent && zone === 'root') return; // already a root
 
     try {
-      if (zone === 'into') {
+      if (newParent !== oldParent) {
         await store.commitCommand('set_parent', {
           layer_id: fromId,
-          new_parent_id: targetId,
+          new_parent_id: newParent,
         });
-        if (this._opts.matrioska?.()) {
-          this._opts.onNest?.(fromId, targetId);
-        }
-      } else {
-        // Reorder as sibling of target (same parent), before or after
-        const parentId = target.parent_id ?? null;
-        const from = store.layerById(fromId);
-        // If different parent, reparent first then reorder
-        if ((from?.parent_id ?? null) !== parentId) {
-          await store.commitCommand('set_parent', {
-            layer_id: fromId,
-            new_parent_id: parentId,
+      }
+      if (zone === 'before' || zone === 'after') {
+        const sibs = store.childrenOf(newParent).map((s) => s.id).filter((id) => id !== fromId);
+        const ti = sibs.indexOf(targetId);
+        if (ti >= 0) {
+          sibs.splice(zone === 'before' ? ti : ti + 1, 0, fromId);
+          await store.commitCommand('reorder_siblings', {
+            parent_id: newParent,
+            order: sibs,
           });
         }
-        const siblings = store.childrenOf(parentId).map(s => s.id);
-        const without = siblings.filter(id => id !== fromId);
-        const ti = without.indexOf(targetId);
-        if (ti < 0) return;
-        const insertAt = zone === 'before' ? ti : ti + 1;
-        without.splice(insertAt, 0, fromId);
-        await store.commitCommand('reorder_siblings', {
-          parent_id: parentId,
-          order: without,
-        });
       }
       this.render();
       this.viewport?.renderLayers();
       this.viewport?.renderSelection();
       window.dispatchEvent(new CustomEvent('editor:doc-changed'));
-    } catch (err) {
-      console.error('drop failed', err);
-      window.alert(`No se pudo reordenar: ${err.message}`);
-    }
-  }
-
-  async _dropAsRoot(fromId) {
-    try {
-      const from = store.layerById(fromId);
-      if (!from) return;
-      if (from.parent_id != null) {
-        await store.commitCommand('set_parent', {
-          layer_id: fromId,
-          new_parent_id: null,
-        });
+      if (newParent !== oldParent) {
+        if (newParent) this._opts.onNest?.(fromId, newParent);
+        else this._opts.onUnnest?.(fromId);
       }
-      const roots = store.roots().map(r => r.id);
-      const without = roots.filter(id => id !== fromId);
-      without.push(fromId);
-      await store.commitCommand('reorder_siblings', {
-        parent_id: null,
-        order: without,
-      });
-      this.render();
-      this.viewport?.renderLayers();
-      window.dispatchEvent(new CustomEvent('editor:doc-changed'));
     } catch (err) {
-      window.alert(`No se pudo mover: ${err.message}`);
+      console.error('move failed', err);
+      flash(`No se pudo mover: ${err.message}`);
+      this.render();
     }
   }
 
@@ -319,7 +383,7 @@ export class LayerTree {
       this.viewport?.renderSelection();
       window.dispatchEvent(new CustomEvent('editor:doc-changed'));
     } catch (err) {
-      window.alert(`No se pudo eliminar: ${err.message}`);
+      flash(`No se pudo eliminar: ${err.message}`);
     }
   }
 
@@ -337,7 +401,7 @@ export class LayerTree {
       window.dispatchEvent(new CustomEvent('editor:doc-changed'));
     } catch (err) {
       console.error(err);
-      window.alert(`No se pudo cambiar visibilidad: ${err.message}`);
+      flash(`No se pudo cambiar visibilidad: ${err.message}`);
     }
   }
 }

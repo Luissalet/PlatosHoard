@@ -1,4 +1,5 @@
 // store.js — canonical document store + UI state (tasks 07, 08)
+import * as affine from './affine.mjs';
 // The document is the single source of truth. UI state (selection, zoom,
 // pan) is kept SEPARATE and never written back into the document.
 
@@ -184,16 +185,16 @@ export class EditorStore {
 
   childrenOf(parentId) {
     if (!this.doc?.layers) return [];
+    // A root's parent_id may be null OR missing: normalise both to null so
+    // childrenOf(null) really returns every root (reordering depended on it).
+    const want = parentId ?? null;
     return Object.values(this.doc.layers)
-      .filter(l => l.parent_id === parentId)
+      .filter(l => (l.parent_id ?? null) === want)
       .sort((a, b) => (a.order ?? 0) - (b.order ?? 0));
   }
 
   roots() {
-    if (!this.doc?.layers) return [];
-    return Object.values(this.doc.layers)
-      .filter(l => l.parent_id === null || l.parent_id === undefined)
-      .sort((a, b) => (a.order ?? 0) - (b.order ?? 0));
+    return this.childrenOf(null);
   }
 
   subtreeIds(rootId) {
@@ -233,3 +234,75 @@ export class EditorStore {
 
 // Singleton for the page
 export const store = new EditorStore();
+
+// ---------------------------------------------------------------------------
+// Turning / moving a layer WITHOUT dragging its subtree along
+// ---------------------------------------------------------------------------
+
+/** World matrix of a layer from the pose chain (flip is geometry, not pose). */
+export function worldMatrixOf(layerId) {
+  const chain = [];
+  let cur = layerId;
+  const seen = new Set();
+  while (cur && !seen.has(cur)) {
+    seen.add(cur);
+    const n = store.layerById(cur);
+    if (!n) break;
+    chain.unshift(affine.matrix(n.pose));
+    cur = n.parent_id;
+  }
+  let M = affine.identity();
+  for (const lm of chain) M = affine.multiply(M, lm);
+  return M;
+}
+
+/** Where each direct child sits in the world right now. */
+export function childWorldSnapshots(layerId) {
+  try {
+    const world = worldMatrixOf(layerId);
+    return store.childrenOf(layerId).map((c) => ({
+      id: c.id,
+      world: affine.multiply(world, affine.matrix(c.pose)),
+    }));
+  } catch {
+    return [];
+  }
+}
+
+/**
+ * Put every child back where it was: L_new = inverse(W_parent_new) · W_child_old.
+ * Call it after the parent's new pose has been committed.
+ */
+export async function restoreChildWorlds(layerId, snaps) {
+  if (!snaps?.length || !store.layerById(layerId)) return 0;
+  let inv;
+  try {
+    inv = affine.inverse(worldMatrixOf(layerId));
+  } catch {
+    return 0;
+  }
+  let n = 0;
+  for (const snap of snaps) {
+    if (!store.layerById(snap.id)) continue;
+    const local = affine.poseFromMatrix(affine.multiply(inv, snap.world));
+    if (!Number.isFinite(local.scale) || local.scale <= 0) continue;
+    try {
+      await store.commitCommand('set_pose', {
+        layer_id: snap.id,
+        pose: {
+          tx: Number(local.tx), ty: Number(local.ty),
+          scale: Number(local.scale), angle_deg: Number(local.angle_deg),
+        },
+      });
+      n += 1;
+    } catch (err) {
+      console.warn('keep child in place failed', snap.id, err);
+    }
+  }
+  return n;
+}
+
+/** The panel switch: transform this layer only, leaving its children put. */
+export function childrenAreDetached() {
+  return !!(typeof document !== 'undefined' && document.getElementById('rotate-solo')?.checked);
+}

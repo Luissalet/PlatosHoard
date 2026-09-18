@@ -39,6 +39,7 @@ from shapely.geometry.base import BaseGeometry
 from shapely.ops import unary_union
 
 from .transforms import Pose, apply_flip_h, apply_pose, world_pose
+from silhouettes.pinch import depinch
 from .constraints import (
     ConstraintError, canvas_shape, inner_canvas, polygon_parts, material,
     require_shape,
@@ -86,15 +87,18 @@ def compose_part(
             raise CompositionError("OUTSIDE_CANVAS",
                                    "No implicit clipping in manufacturing exports")
 
+    # Every recipe is depinched before it leaves: subtracting one silhouette
+    # from another readily creates a ring contact that is valid on paper and
+    # non-manifold once extruded.
     if mode == "normal":
-        return shape
+        return depinch(shape)
 
     if mode == "inverse":
         result = material(canvas.difference(shape))
         if result.is_empty:
             raise CompositionError("EMPTY_GEOMETRY",
                                    "inverse recipe produced no material")
-        return result
+        return depinch(result)
 
     if mode == "shell":
         usable = []
@@ -116,7 +120,7 @@ def compose_part(
         if result.is_empty:
             raise CompositionError("EMPTY_GEOMETRY",
                                    "shell recipe produced no material")
-        return result
+        return depinch(result)
 
     raise CompositionError("UNKNOWN_MODE", f"mode {mode!r} is not supported")
 

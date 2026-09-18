@@ -10,6 +10,7 @@ import xml.etree.ElementTree as ET
 import numpy as np
 from shapely.geometry import Polygon, MultiPolygon, LineString, box
 from shapely.ops import polygonize, unary_union
+from .pinch import separate_touching_rings
 
 
 @dataclass
@@ -288,6 +289,10 @@ def vector_to_polygons(vector, tolerance=None):
         # Match the declared SVG viewport. No ring is discarded by a heuristic.
         material = material.intersection(box(0, 0, vector.width, vector.height))
     result = polygons_to_flat([material])
+    # A traced bitmap can leave two holes sharing a vertex.  Opening those
+    # contacts here keeps every asset printable from the moment it is
+    # imported, instead of failing later at export (see silhouettes.pinch).
+    result = [separate_touching_rings(p) for p in result]
     if not result or any(not p.is_valid or p.area <= 0 for p in result):
         raise ValueError("SVG fill produced no valid positive-area polygons")
     return result

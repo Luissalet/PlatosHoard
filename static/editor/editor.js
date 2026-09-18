@@ -47,7 +47,7 @@ const CANVAS_IDS = ['canvas-width-mm', 'canvas-height-mm', 'canvas-padding-top',
                     'canvas-padding-right', 'canvas-padding-bottom', 'canvas-padding-left'];
 const PANEL_IDS = ['recipe-select', 'export-selected', 'export-batch', 'export-fmt-svg', 'export-fmt-png',
                    'fit-best', 'matrioska-stack', 'matrioska-padding-mm',
-                   'marco-wall-w', 'marco-wall-h', 'marco-padding'];
+                   'marco-wall-w', 'marco-wall-h', 'marco-padding', 'rotate-solo'];
 
 function enableToolbar(hasDoc) {
   for (const id of [...TOOLBAR_IDS, ...CANVAS_IDS, ...PANEL_IDS]) {
@@ -211,12 +211,12 @@ async function runFit() {
       const pose = await fitChildIntoParentPose(node.id, node.parent_id);
       await store.commitCommand('set_pose', { layer_id: node.id, pose: cleanPose(pose) });
     } else {
-      const rect = affine.usableCanvasRect(store.doc.canvas);
-      const asset = store.assetById(node.asset_id);
-      const pose = affine.fitPoseToRect(asset.local_bounds, rect, node.pose?.angle_deg || 0);
-      await store.commitCommand('apply_fit_result', {
-        layer_id: node.id, pose: cleanPose(pose), base_revision: store.revision,
-      });
+      const pose = await fitRootPose(node);
+      if (pose) {
+        await store.commitCommand('apply_fit_result', {
+          layer_id: node.id, pose, base_revision: store.revision,
+        });
+      }
     }
     // Descendants must follow a resized parent.
     await applyMatrioskaFitAll({ silent: true, rootId: node.id });
@@ -224,6 +224,29 @@ async function runFit() {
     flash('Posición aplicada.');
   } catch (err) {
     flash(`Fit fallido: ${err.message}`);
+  }
+}
+
+/** A layer dragged out to the top level: fill the sheet, then re-fit its own children. */
+async function unnestAndFit(layerId) {
+  const node = store.layerById(layerId);
+  if (!node || node.parent_id) return;
+  flash('Ajustando al lienzo…');
+  try {
+    const pose = await fitRootPose(node);
+    if (pose) {
+      await store.commitCommand('apply_fit_result', {
+        layer_id: layerId,
+        pose,
+        base_revision: store.revision,
+      });
+    }
+    await applyMatrioskaFitAll({ silent: true, rootId: layerId });
+    refreshAll();
+    flash('Capa movida al nivel superior y ajustada al lienzo.');
+  } catch (err) {
+    flash(`No se pudo ajustar: ${err.message}`);
+    refreshAll();
   }
 }
 
@@ -363,6 +386,40 @@ async function remountMatrioskaChain(layers) {
   return ordered;
 }
 
+/**
+ * Largest pose of a ROOT layer inside the usable sheet, computed server-side
+ * from the real polygons (``contain_rect``).  The client fallback measures a
+ * sampled outline, which misses the extreme points of a complex silhouette
+ * and, once the layer is rotated, its bounding box is mostly empty space.
+ */
+async function fitRootPose(layer) {
+  const asset = store.assetById(layer.asset_id);
+  const angle = Number(layer.pose?.angle_deg) || 0;
+  try {
+    const res = await fetch(`${store.baseUrl}/documents/${encodeURIComponent(store.doc.id)}/fit`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        layer_id: layer.id,
+        target: 'canvas',
+        mode: 'best',
+        padding_mm: 0,
+        angles_deg: [angle],
+        request_seq: Date.now(),
+      }),
+    });
+    const body = await res.json().catch(() => ({}));
+    const pose = body.pose_local || body.pose;
+    if (res.ok && pose && Number(pose.scale) > 0) return cleanPose(pose);
+  } catch (err) {
+    console.warn('server canvas fit failed, using client estimate', err);
+  }
+  if (!asset?.local_bounds || !store.doc?.canvas) return null;
+  const rect = affine.usableCanvasRect(store.doc.canvas);
+  return cleanPose(affine.fitPoseToRect(asset.local_bounds, rect, angle,
+                                        affine.sampleLocalOutline(asset, 400)));
+}
+
 /** Fit canvas: max-scale every root into the usable sheet. */
 async function applyFitToCanvasAll({ silent = false } = {}) {
   if (!store.doc?.canvas) return;
@@ -374,10 +431,11 @@ async function applyFitToCanvasAll({ silent = false } = {}) {
     const asset = store.assetById(layer.asset_id);
     if (!asset?.local_bounds) continue;
     try {
-      const pose = affine.fitPoseToRect(asset.local_bounds, rect, layer.pose?.angle_deg || 0);
+      const pose = await fitRootPose(layer);
+      if (!pose) continue;
       await store.commitCommand('apply_fit_result', {
         layer_id: layer.id,
-        pose: cleanPose(pose),
+        pose,
         base_revision: store.revision,
       });
       n += 1;
@@ -700,6 +758,7 @@ async function boot() {
   tree = new LayerTree($('layer-tree'), viewport, {
     matrioska: () => true,
     onNest: (childId, parentId) => nestAndFit(childId, parentId),
+    onUnnest: (layerId) => unnestAndFit(layerId),
   });
   inspector = new Inspector($('inspector'), viewport);
   interactions = new Interactions2D(viewport);

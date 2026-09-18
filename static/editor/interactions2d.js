@@ -15,7 +15,7 @@
 //  - confirmed-content history: one drag = one action; Ctrl+Z / Ctrl+Y via
 //    restore_snapshot with a growing revision; shortcuts ignored in inputs
 import * as affine from './affine.mjs';
-import { store } from './store.js';
+import { store, childWorldSnapshots, restoreChildWorlds, childrenAreDetached } from './store.js';
 
 const HISTORY_LIMIT = 100;
 
@@ -264,12 +264,16 @@ export class Interactions2D {
         affine.multiply(this._parentWorldMatrix(layerId), affine.layerMatrix(node)),
         centerLocal,
       );
+      // With "rotate this layer only", remember where the children are in the
+      // world now so they can be put back after the parent has turned.
+      const childWorlds = childrenAreDetached() ? childWorldSnapshots(layerId) : null;
       this._gesture = {
         kind: 'rotate',
         layerId,
         startPose: { ...node.pose },
         parentWorld,
         centerLocal,
+        childWorlds,
         startAngle: Math.atan2(pt.y - centerWorld.y, pt.x - centerWorld.x) * 180 / Math.PI,
         revisionAtStart: store.revision,
       };
@@ -311,7 +315,10 @@ export class Interactions2D {
       const worldM = affine.multiply(g.parentWorld, affine.layerMatrix({ ...node, pose: g.startPose }));
       const centerWorld = affine.point(worldM, g.centerLocal);
       const ang = Math.atan2(pt.y - centerWorld.y, pt.x - centerWorld.x) * 180 / Math.PI;
-      pose = { ...g.startPose, angle_deg: g.startPose.angle_deg + (ang - g.startAngle) };
+      let deg = g.startPose.angle_deg + (ang - g.startAngle);
+      if (e.shiftKey) deg = Math.round(deg / 15) * 15;   // Shift → 15° steps
+      pose = { ...g.startPose, angle_deg: deg };
+      this._flash(`${Math.round(((deg % 360) + 360) % 360)}°`);
     }
     if (pose) {
       if (g.kind === 'drag' && g.serverPose && g.serverPoseFor) {
@@ -387,28 +394,13 @@ export class Interactions2D {
         const body = await res.json().catch(() => ({}));
         const p = body.pose_local || body.pose;
         if (res.ok && p && Number(p.scale) > 0 && this._gesture === g) {
+          // The server keeps the centre it was given, so its answer is simply
+          // "the largest size that fits at that point".  Always take the
+          // newest one: holding on to an older one would show a size that no
+          // longer belongs to where the pointer is.
           const next = {
             tx: Number(p.tx), ty: Number(p.ty), scale: Number(p.scale), angle_deg: Number(p.angle_deg),
           };
-          // Hysteresis against flicker: keep the pose we already show unless
-          // the new one is clearly bigger, or the old one no longer fits where
-          // the pointer is now.
-          if (g.serverPose && g.serverPoseFor) {
-            const prevShifted = {
-              ...g.serverPose,
-              tx: g.serverPose.tx + (want.tx - g.serverPoseFor.tx),
-              ty: g.serverPose.ty + (want.ty - g.serverPoseFor.ty),
-            };
-            const stillFits = this._maybeClampPose(g.layerId, prevShifted).scale + 1e-9 >= prevShifted.scale;
-            if (stillFits && next.scale < prevShifted.scale * 1.04) {
-              g.serverPose = prevShifted;
-              g.serverPoseFor = { tx: want.tx, ty: want.ty };
-              g.serverPoseExact = false; // translated by hand → re-fit on drop
-              g.previewInFlight = false;
-              if (g.previewWanted && this._gesture === g) run();
-              return;
-            }
-          }
           g.serverPose = next;
           g.serverPoseFor = { tx: want.tx, ty: want.ty };
           g.serverPoseExact = true;
@@ -460,14 +452,27 @@ export class Interactions2D {
       if (store.fitToCanvas && !node.parent_id && store.doc?.canvas) {
         const lb = affine.measureLocalBounds(asset) || asset.local_bounds;
         if (!lb) return pose;
-        return affine.clampPoseToRect(pose, lb, affine.usableCanvasRect(store.doc.canvas));
+        // Clamp against the silhouette, not its bounding box: a rotated piece
+        // must be free to reach the sheet edge with its actual outline.
+        const g = this._gesture;
+        let pts = null;
+        if (g && g.layerId === layerId) {
+          // Dense: a sparse sample skips the extreme points of a complex
+          // outline and would let the piece poke out of the sheet.
+          if (!g._selfPts) g._selfPts = affine.sampleLocalOutline(asset, 400);
+          pts = g._selfPts;
+        }
+        return affine.clampPoseToRect(pose, lb, affine.usableCanvasRect(store.doc.canvas), pts);
       }
       if (node.parent_id && (store.matrioskaMode || store.fitToCanvas)) {
         const parent = store.layerById(node.parent_id);
         const pAsset = store.assetById(parent?.asset_id);
         if (!pAsset) return pose;
         const padding = this._childPaddingMm(node);
-        const opts = { flipChild: !!node.flip_h, flipParent: !!parent.flip_h, inflate: true };
+        // ``inflate`` would slide the centre away from the pointer to grow a
+        // little more — that reads as the piece fighting the hand.  While the
+        // user drags, the centre IS the pointer and only the scale adapts.
+        const opts = { flipChild: !!node.flip_h, flipParent: !!parent.flip_h, inflate: false };
         const g = this._gesture;
         // Cache the sampled outlines for the whole gesture.
         if (g && g.layerId === layerId) {
@@ -477,9 +482,15 @@ export class Interactions2D {
           opts.parentPath = g._parentPath;
         }
         const grown = affine.maxScalePoseAtCenter(asset, pAsset, pose, padding, opts);
-        if (grown) return grown;
-        const clamped = affine.clampPoseInsideSilhouette(asset, pAsset, pose, padding, opts);
-        return affine.maxScalePoseAtCenter(asset, pAsset, clamped, padding, opts) || clamped;
+        if (grown) {
+          if (g && g.layerId === layerId) g.lastGoodPose = grown;
+          return grown;
+        }
+        // Nothing fits at this point (pointer outside the parent): hold the
+        // last valid pose.  Teleporting toward the parent centroid, as the
+        // old fallback did, threw the piece across the canvas mid-drag.
+        if (g && g.layerId === layerId && g.lastGoodPose) return g.lastGoodPose;
+        return pose;
       }
     } catch {
       return pose;
@@ -550,10 +561,14 @@ export class Interactions2D {
       this._commitPose(pending.layerId, shown, { constrainOnly: true });
       return;
     }
-    this._commitPose(pending.layerId, pending.pose);
+    this._commitPose(pending.layerId, pending.pose, {
+      // Children ride along with a rotating parent (rigid, nothing to re-fit)
+      // unless the user asked to turn this layer alone.
+      keepChildren: g.kind === 'rotate' ? g.childWorlds : null,
+    });
   }
 
-  async _commitPose(layerId, pose, { skipServerFit = false, constrainOnly = false } = {}) {
+  async _commitPose(layerId, pose, { skipServerFit = false, constrainOnly = false, keepChildren = null } = {}) {
     const cleaned = {
       tx: Number(pose.tx),
       ty: Number(pose.ty),
@@ -633,6 +648,13 @@ export class Interactions2D {
       this.viewport.renderLayers();
       this.viewport.renderSelection();
       window.dispatchEvent(new CustomEvent('editor:pose-changed', { detail: { layerId } }));
+      if (keepChildren?.length) {
+        const kept = await restoreChildWorlds(layerId, keepChildren);
+        this.viewport.renderLayers();
+        this.viewport.renderSelection();
+        window.dispatchEvent(new CustomEvent('editor:doc-changed'));
+        if (kept) this._flash(`${kept} hijo(s) mantenidos en su sitio.`);
+      }
     } catch (err) {
       this._flash(err.message);
       this.viewport.renderLayers();
@@ -681,6 +703,9 @@ export class Interactions2D {
     const el = document.getElementById('fit-status');
     if (!el) return;
     el.textContent = msg;
-    setTimeout(() => { el.textContent = ''; }, 3000);
+    // One timer, not one per call: the live angle readout fires on every
+    // pointermove and would otherwise pile up hundreds of them.
+    clearTimeout(this._flashTimer);
+    this._flashTimer = setTimeout(() => { el.textContent = ''; }, 3000);
   }
 }

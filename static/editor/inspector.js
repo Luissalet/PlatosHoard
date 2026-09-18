@@ -1,7 +1,7 @@
 // inspector.js — dimension/property panel wired to task-06 setters (tasks 07, 09)
 // Numeric changes go through the same pose math as the 2D handles:
 // width/height inputs recompute ONE uniform scale (aspect preserved).
-import { store } from './store.js';
+import { store, childWorldSnapshots, restoreChildWorlds, childrenAreDetached } from './store.js';
 import * as affine from './affine.mjs';
 
 export class Inspector {
@@ -88,9 +88,17 @@ export class Inspector {
         return;
       }
       try {
+        // Same rule as the canvas gizmo: with "solo la capa" on, the children
+        // keep the position they have in the sheet instead of following.
+        const detach = childrenAreDetached();
+        const snaps = detach ? childWorldSnapshots(layerId) : [];
         await store.commitCommand('set_pose', { layer_id: layerId, pose: p });
+        const kept = snaps.length ? await restoreChildWorlds(layerId, snaps) : 0;
         this.viewport.renderLayers();
+        this.viewport.renderSelection();
         this.render(layerId);
+        window.dispatchEvent(new CustomEvent('editor:doc-changed'));
+        if (kept) this._flash(`${kept} hijo(s) mantenidos en su sitio.`);
       } catch (err) {
         this._flash(err.message);
       }

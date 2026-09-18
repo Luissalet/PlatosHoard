@@ -160,3 +160,59 @@ def test_pack_bundle_accepts_marco_outside_canvas():
     assert len(plan) == 1
     blob = pack_bundle(plan, 200, 200, formats=("svg", "stl"), stl_exporter=export_stl)
     assert len(blob) > 100
+
+
+def test_coplanar_siblings_share_one_inverse_plate():
+    """Two layers at the same level → ONE inverse STL with both holes."""
+    assets = {
+        "a_l": {"id": "a_l", "name": "Left", "_geometry": box(-20, -20, 20, 20)},
+        "a_r": {"id": "a_r", "name": "Right", "_geometry": box(-20, -20, 20, 20)},
+    }
+    layers = {
+        "L_left": _square_layer("L_left", "a_l", "Left", tx=60.0, ty=100.0, scale=1.0),
+        "L_right": _square_layer("L_right", "a_r", "Right", tx=140.0, ty=100.0, scale=1.0),
+    }
+    layers["L_right"]["stack_rank"] = 2
+
+    plan = build_export_plan(
+        layers, assets, ["L_left", "L_right"], 200.0, 200.0,
+        {"top": 1, "right": 1, "bottom": 1, "left": 1},
+        families=BATCH_FAMILIES,
+    )
+
+    inverses = [i for i in plan if i.family == "inverse_registered"]
+    assert len(inverses) == 1
+    item = inverses[0]
+    assert item.stem.startswith("inverse_registered/nivel_00_")
+    # One plate, two holes.
+    poly = item.geometry
+    assert poly.geom_type == "Polygon"
+    assert len(poly.interiors) == 2
+    assert poly.area == pytest.approx(200 * 200 - 2 * 40 * 40, rel=1e-6)
+
+    # The other families are still one piece per layer.
+    for family in ("normal_registered", "normal_fullframe", "inverse_fullframe"):
+        assert len([i for i in plan if i.family == family]) == 2
+
+
+def test_nested_levels_are_not_merged():
+    """A child sits at another level → its own inverse plate."""
+    assets = {
+        "a_p": {"id": "a_p", "name": "Parent", "_geometry": box(-60, -60, 60, 60)},
+        "a_c": {"id": "a_c", "name": "Child", "_geometry": box(-20, -20, 20, 20)},
+    }
+    layers = {
+        "L_p": _square_layer("L_p", "a_p", "Parent", tx=100.0, ty=100.0, scale=1.0),
+        "L_c": _square_layer("L_c", "a_c", "Child", tx=0.0, ty=0.0, scale=0.5),
+    }
+    layers["L_c"]["parent_id"] = "L_p"
+    layers["L_c"]["stack_rank"] = 2
+
+    plan = build_export_plan(
+        layers, assets, ["L_p", "L_c"], 200.0, 200.0,
+        {"top": 1, "right": 1, "bottom": 1, "left": 1},
+        families=("inverse_registered",),
+    )
+    inverses = [i for i in plan if i.family == "inverse_registered"]
+    assert len(inverses) == 2
+    assert not any("nivel_" in i.stem for i in inverses)

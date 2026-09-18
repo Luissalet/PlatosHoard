@@ -8,18 +8,18 @@
 <link rel="icon" href="/static/favicon.ico" sizes="any">
 <link rel="icon" type="image/png" sizes="192x192" href="/static/icon-192.png">
 <link rel="apple-touch-icon" href="/static/apple-touch-icon.png">
-  <link rel="stylesheet" href="/static/editor/editor.css?v=20260917r"/>
+  <link rel="stylesheet" href="/static/editor/editor.css?v=20260918j"/>
   <script type="importmap">
   {
     "imports": {
-      "/static/editor/store.js": "/static/editor/store.js?v=20260917r",
-      "/static/editor/affine.mjs": "/static/editor/affine.mjs?v=20260917r",
-      "/static/editor/viewport2d.js": "/static/editor/viewport2d.js?v=20260917r",
-      "/static/editor/layer_tree.js": "/static/editor/layer_tree.js?v=20260917r",
-      "/static/editor/inspector.js": "/static/editor/inspector.js?v=20260917r",
-      "/static/editor/interactions2d.js": "/static/editor/interactions2d.js?v=20260917r",
-      "/static/editor/export_dialog.js": "/static/editor/export_dialog.js?v=20260917r",
-      "/static/editor/viewer3d.mjs": "/static/editor/viewer3d.mjs?v=20260917r"
+      "/static/editor/store.js": "/static/editor/store.js?v=20260918j",
+      "/static/editor/affine.mjs": "/static/editor/affine.mjs?v=20260918j",
+      "/static/editor/viewport2d.js": "/static/editor/viewport2d.js?v=20260918j",
+      "/static/editor/layer_tree.js": "/static/editor/layer_tree.js?v=20260918j",
+      "/static/editor/inspector.js": "/static/editor/inspector.js?v=20260918j",
+      "/static/editor/interactions2d.js": "/static/editor/interactions2d.js?v=20260918j",
+      "/static/editor/export_dialog.js": "/static/editor/export_dialog.js?v=20260918j",
+      "/static/editor/viewer3d.mjs": "/static/editor/viewer3d.mjs?v=20260918j"
     }
   }
   </script>
@@ -65,7 +65,7 @@
         <div id="layer-tree" class="layer-tree" aria-live="polite">
           <p class="empty-state">Sin capas.</p>
         </div>
-        <p class="hint">Arrastra una fila sobre otra para cambiar quién va dentro de quién. Los hijos se escalan al máximo al moverlos.</p>
+        <p class="hint">Arrastra una fila: por el <b>centro</b> de otra para meterla dentro, por su <b>borde</b> superior/inferior para ponerla al lado, o al <b>hueco vacío</b> de la lista para sacarla al nivel superior.</p>
       </section>
 
       <section class="panel step-panel">
@@ -88,6 +88,9 @@
             <span class="field-input"><input id="marco-padding" type="number" min="0" step="0.5" value="1" disabled/><span class="unit">mm</span></span>
           </label>
         </div>
+        <label class="checkbox-row" title="Al girar o mover una capa (con el tirador o desde el inspector), sus hijos se quedan donde están en la lámina">
+          <input id="rotate-solo" type="checkbox" disabled/> Transformar solo esta capa (los hijos no la siguen)
+        </label>
         <div class="button-row">
           <button type="button" id="matrioska-stack" class="btn-secondary" disabled title="Re-anida de mayor a menor y vuelve a encajar todo">Re-apilar todo</button>
           <button type="button" id="fit-best" class="btn-secondary" disabled title="Busca la mejor posición y escala de la capa seleccionada">Mejor posición</button>
@@ -147,6 +150,6 @@
 
   <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/build/three.min.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/controls/OrbitControls.js"></script>
-  <script type="module" src="/static/editor/editor.js?v=20260917r"></script>
+  <script type="module" src="/static/editor/editor.js?v=20260918j"></script>
 </body>
 </html>

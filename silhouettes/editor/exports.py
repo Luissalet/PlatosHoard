@@ -273,6 +273,23 @@ def _ensure_asset_geometry(asset: Mapping[str, Any], asset_id: str) -> BaseGeome
     return local
 
 
+def _depth(layers: Mapping[str, Mapping[str, Any]], layer_id: str) -> int:
+    """Number of ancestors of ``layer_id`` — its level in the matrioska."""
+    depth = 0
+    seen = {layer_id}
+    current = layers[layer_id].get("parent_id")
+    while current is not None:
+        if current in seen:
+            raise ExportError("HIERARCHY_CYCLE", f"cycle at {current!r}")
+        seen.add(current)
+        node = layers.get(current)
+        if node is None:
+            raise ExportError("MISSING_LAYER", f"missing {current!r}")
+        depth += 1
+        current = node.get("parent_id")
+    return depth
+
+
 def build_export_plan(
     layers: Mapping[str, Mapping[str, Any]],
     assets: Mapping[str, Any],
@@ -315,6 +332,19 @@ def build_export_plan(
             geom = apply_flip_h(geom)
         shapes[lid] = apply_pose(geom, world_pose(lid, layers))
 
+    # ---- One inverse plate per LEVEL -------------------------------------
+    # The registered inverse is a recipe of the canvas (C - S).  Two coplanar
+    # siblings therefore belong on the SAME sheet, carved with both holes,
+    # instead of two nested plates that would stack on top of each other.
+    # Solid and fullframe pieces stay one per layer.
+    levels: dict[int, list[str]] = {}
+    for lid in selected_ids:
+        if is_frame_layer_name(layers[lid].get("name"), lid):
+            continue
+        levels.setdefault(_depth(layers, lid), []).append(lid)
+    merged_levels = {lvl: ids for lvl, ids in levels.items() if len(ids) > 1}
+    merged_of = {lid: lvl for lvl, ids in merged_levels.items() for lid in ids}
+
     result: list[ExportItem] = []
     for lid in selected_ids:
         node = layers[lid]
@@ -349,6 +379,9 @@ def build_export_plan(
             continue
 
         for family in families:
+            # Emitted once per level further down.
+            if family == "inverse_registered" and lid in merged_of:
+                continue
             fullframe = family.endswith("fullframe")
             if fullframe:
                 pose = contain_rect(base_geom, U, angle_deg=0.0)
@@ -370,6 +403,32 @@ def build_export_plan(
             require_shape(out, f"export {lid}/{family}")
 
             result.append(ExportItem(f"{family}/{slug}", lid, family, out, pose, h))
+
+    if "inverse_registered" in families:
+        for lvl in sorted(merged_levels):
+            ids = sorted(merged_levels[lvl],
+                         key=lambda k: layers[k].get("stack_rank", 0))
+            union = unary_union([shapes[k] for k in ids])
+            out = compose_part(union, C, "inverse")
+            require_shape(out, f"export nivel {lvl}/inverse_registered")
+            heights = []
+            for k in ids:
+                hk = layers[k].get("extrusion_mm")
+                heights.append(_finite(
+                    hk if hk is not None else default_extrusion_mm,
+                    "extrusion_mm", positive=True,
+                ))
+            names = safe_slug("_".join(
+                str(layers[k].get("name") or k) for k in ids
+            ))
+            result.append(ExportItem(
+                f"inverse_registered/nivel_{lvl:02d}_{names}",
+                "+".join(ids),
+                "inverse_registered",
+                out,
+                world_pose(ids[0], layers),
+                max(heights),
+            ))
     return result
 
 

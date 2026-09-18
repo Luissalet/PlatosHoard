@@ -157,17 +157,50 @@ button:disabled {
   border-radius: 2px;
   border: 1px solid rgba(255,255,255,0.25);
 }
-.tree-row.dragging { opacity: 0.45; }
+.tree-row.dragging { opacity: 0.4; }
+body.tree-dragging, body.tree-dragging * { cursor: grabbing !important; }
+.tree-drag-ghost {
+  position: fixed;
+  z-index: 9999;
+  pointer-events: none;
+  padding: 3px 8px;
+  border-radius: 6px;
+  background: var(--accent);
+  color: #fff;
+  font-size: 0.78rem;
+  font-weight: 600;
+  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.45);
+}
+.tree-root-zone {
+  margin-top: 4px;
+  padding: 6px 8px;
+  border: 1px dashed var(--border);
+  border-radius: 6px;
+  color: var(--muted);
+  font-size: 0.7rem;
+  text-align: center;
+}
+.tree-root-zone.active {
+  border-color: var(--accent);
+  border-style: solid;
+  color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 14%, transparent);
+}
+.layer-tree.drop-root {
+  outline: 2px dashed var(--accent);
+  outline-offset: -3px;
+  border-radius: 6px;
+}
 .tree-row.drop-into {
   outline: 2px solid var(--accent);
   outline-offset: -2px;
   background: rgba(79, 140, 255, 0.15);
 }
 .tree-row.drop-before {
-  box-shadow: inset 0 2px 0 0 var(--ok);
+  box-shadow: inset 0 3px 0 0 var(--ok);
 }
 .tree-row.drop-after {
-  box-shadow: inset 0 -2px 0 0 var(--ok);
+  box-shadow: inset 0 -3px 0 0 var(--ok);
 }
 
 .insp-row {
@@ -232,7 +265,11 @@ button:disabled {
   gap: 4px;
   padding: 3px 4px;
   border-radius: 6px;
+  cursor: grab;
+  user-select: none;
+  touch-action: none;
 }
+.tree-row button { cursor: pointer; }
 .tree-row:hover {
   background: var(--panel-2);
 }

@@ -252,12 +252,13 @@ def _run_fit_sync(doc: dict, body: dict) -> dict:
         else:
             container = parent_geom
 
-        hint = None
+        fixed = None
         if mode == "at_position":
-            # Local optimum near the dropped centre: the child fills the
-            # pocket it landed in (wedged on ≥ 2 sides), never just one edge.
+            # The centre the caller asked for is FINAL: only the scale is
+            # searched.  A drifting centre fights the user's hand while they
+            # drag; wedging into a pocket is what "Mejor posición" is for.
             wp = _current_world_pose()
-            hint = (wp.tx, wp.ty)
+            fixed = (wp.tx, wp.ty)
             angles = [wp.angle_deg]
 
         # Sibling obstacles (other children of the same parent)
@@ -277,7 +278,7 @@ def _run_fit_sync(doc: dict, body: dict) -> dict:
         fr = fit_inside(
             local_geom, container,
             padding_mm=padding,
-            center_hint=hint,
+            fixed_center=fixed,
             angles_deg=angles,
             obstacles=obstacles,
             sibling_gap_mm=float((node.get("fit") or {}).get("sibling_gap_mm") or 2.0),
@@ -704,9 +705,60 @@ def post_mesh_rings(doc_id: str) -> Any:
     C = canvas_shape(canvas["width_mm"], canvas["height_mm"])
     results = {}
 
+    # Coplanar siblings share ONE inverse plate (same rule as the export
+    # plan): layers at the same depth carve the same sheet.  The plate is
+    # returned under the first sibling's id; the others are omitted.
+    merge_levels = bool(body.get("merge_levels", True)) and mode == "inverse" \
+        and not include_subtree
+    level_of: dict[str, list[str]] = {}
+    primary_of: dict[str, list[str]] = {}
+    skip: set[str] = set()
+    if merge_levels:
+        from silhouettes.editor.frame import is_frame_layer_name
+        groups: dict[int, list[str]] = {}
+        for lid in layer_ids:
+            node = doc["layers"].get(lid)
+            if node is None or is_frame_layer_name(node.get("name"), lid):
+                continue
+            depth = 0
+            cur = node.get("parent_id")
+            seen = {lid}
+            while cur is not None and cur not in seen and cur in doc["layers"]:
+                seen.add(cur)
+                depth += 1
+                cur = doc["layers"][cur].get("parent_id")
+            groups.setdefault(depth, []).append(lid)
+        for ids_at_level in groups.values():
+            if len(ids_at_level) > 1:
+                primary_of[ids_at_level[0]] = ids_at_level
+                skip.update(ids_at_level[1:])
+
     try:
         for lid in layer_ids:
             if lid not in doc["layers"]:
+                continue
+            if lid in skip:
+                continue
+            if lid in primary_of:
+                shapes = []
+                for sid in primary_of[lid]:
+                    try:
+                        shapes.append(_layer_world_geom(doc, sid))
+                    except Exception:
+                        pass
+                if not shapes:
+                    continue
+                geom = material(C.difference(unary_union(shapes)))
+                if geom.is_empty:
+                    continue
+                node = doc["layers"][lid]
+                ext = node.get("extrusion_mm")
+                if ext is None:
+                    ext = doc.get("default_extrusion_mm", 3)
+                results[lid] = {
+                    "rings": _geometry_to_rings(geom),
+                    "extrusion_mm": float(ext),
+                }
                 continue
             ids = [lid]
             if include_subtree and mode == "inverse":

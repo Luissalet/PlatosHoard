@@ -4,6 +4,7 @@ import trimesh
 from shapely.geometry import Polygon, MultiPolygon
 from shapely.geometry.polygon import orient
 from .validation import validate_mesh
+from .pinch import separate_touching_rings
 
 
 def _extrude_one(poly, thickness, index):
@@ -24,7 +25,11 @@ def extrude_polygons(polygons, thickness=10.0):
         raise ValueError("Thickness must be positive and finite")
     flat = []
     for poly in polygons:
-        flat.extend(poly.geoms if isinstance(poly, MultiPolygon) else [poly])
+        for part in (poly.geoms if isinstance(poly, MultiPolygon) else [poly]):
+            # Last line of defence: the geometry is normally pinch-free by
+            # the time it gets here (see silhouettes.pinch), but a project
+            # saved before that guard existed still has to export.
+            flat.append(separate_touching_rings(part) if isinstance(part, Polygon) else part)
     if not flat:
         raise ValueError("No polygons to extrude")
     meshes = [_extrude_one(poly, thickness, i) for i, poly in enumerate(flat)]

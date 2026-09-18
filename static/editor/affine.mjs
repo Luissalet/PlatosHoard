@@ -16,6 +16,21 @@ export function multiply(A,B) {
   const [a,b,c,d,e,f]=A, [g,h,i,j,k,l]=B;
   return [a*g+c*h,b*g+d*h,a*i+c*j,b*i+d*j,a*k+c*l+e,b*k+d*l+f];
 }
+/**
+ * Decompose a pose-only matrix (uniform scale + rotation + translation) back
+ * into {tx, ty, scale, angle_deg}.  Used to keep a child's world pose fixed
+ * while its parent turns.
+ */
+export function poseFromMatrix(M) {
+  const [a, b, , , e, f] = M;
+  return {
+    tx: e,
+    ty: f,
+    scale: Math.hypot(a, b),
+    angle_deg: Math.atan2(b, a) * 180 / Math.PI,
+  };
+}
+
 export function inverse(M) {
   const [a,b,c,d,e,f]=M, det=a*d-b*c;
   if (!Number.isFinite(det)||Math.abs(det)<1e-18) throw new Error('SINGULAR_MATRIX');
@@ -100,7 +115,7 @@ export function frustum(worldWidth,worldHeight,viewportWidth,viewportHeight,marg
  * local_bounds: [x0,y0,x1,y1] in local mm (centred at origin).
  * Ignores rotation for the closed-form size (uses AABB of rotated box if angle≠0).
  */
-export function fitPoseToRect(localBounds, rect, angleDeg = 0) {
+export function fitPoseToRect(localBounds, rect, angleDeg = 0, points = null) {
   const [x0, y0, x1, y1] = localBounds;
   const lw = x1 - x0, lh = y1 - y0;
   if (!(lw > 0) || !(lh > 0)) throw new Error('EMPTY_BOUNDS');
@@ -110,8 +125,12 @@ export function fitPoseToRect(localBounds, rect, angleDeg = 0) {
 
   const a = (angleDeg || 0) * Math.PI / 180;
   const c = Math.cos(a), s = Math.sin(a);
-  // AABB of the unit local box after rotation (scale=1, centred)
-  const corners = [[x0, y0], [x1, y0], [x1, y1], [x0, y1]];
+  // Extent of the ROTATED SHAPE.  Rotating the four bbox corners instead
+  // measures a box full of empty space: a diagonal silhouette would then be
+  // held back by corners that contain nothing.
+  const corners = (points && points.length)
+    ? points.map((p) => [p.x, p.y])
+    : [[x0, y0], [x1, y0], [x1, y1], [x0, y1]];
   let minX = Infinity, maxX = -Infinity, minY = Infinity, maxY = -Infinity;
   for (const [x, y] of corners) {
     const rx = c * x - s * y;
@@ -139,12 +158,15 @@ export function fitPoseToRect(localBounds, rect, angleDeg = 0) {
  * Clamp a root pose so the rotated local AABB stays inside rect.
  * If the shape is larger than the rect, shrink scale to the max that fits.
  */
-export function clampPoseToRect(pose, localBounds, rect) {
+export function clampPoseToRect(pose, localBounds, rect, points = null) {
   let p = { ...pose };
   const [x0, y0, x1, y1] = localBounds;
   const a = (p.angle_deg || 0) * Math.PI / 180;
   const c = Math.cos(a), s = Math.sin(a);
-  const corners = [[x0, y0], [x1, y0], [x1, y1], [x0, y1]];
+  // Real outline when available (see fitPoseToRect).
+  const corners = (points && points.length)
+    ? points.map((q) => [q.x, q.y])
+    : [[x0, y0], [x1, y0], [x1, y1], [x0, y1]];
 
   const aabbAt = (scale, tx, ty) => {
     let minX = Infinity, maxX = -Infinity, minY = Infinity, maxY = -Infinity;

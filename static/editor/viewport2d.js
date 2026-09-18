@@ -315,17 +315,81 @@ export class Viewport2D {
     g.setAttribute('transform', `matrix(${m.join(' ')})`);
     g.setAttribute('pointer-events', 'none');
 
-    const poly = document.createElementNS(SVG_NS, 'rect');
-    poly.setAttribute('x', lb[0]);
-    poly.setAttribute('y', lb[1]);
-    poly.setAttribute('width', lb[2] - lb[0]);
-    poly.setAttribute('height', lb[3] - lb[1]);
-    poly.setAttribute('fill', 'none');
-    poly.setAttribute('stroke', '#2563eb');
-    poly.setAttribute('stroke-width', '1.5');
-    poly.setAttribute('stroke-dasharray', '4 2');
-    poly.setAttribute('vector-effect', 'non-scaling-stroke');
-    g.appendChild(poly);
+    // Outline the SILHOUETTE, not its bounding box: a box around a curly
+    // shape is mostly empty and makes a perfectly flush fit look loose.
+    let outlined = false;
+    try {
+      const ds = this._extractPaths(asset.canonical_svg);
+      if (ds.length) {
+        const pg = document.createElementNS(SVG_NS, 'g');
+        pg.setAttribute('transform', `matrix(${affine.pathToLocalMatrix(asset).join(' ')})`);
+        for (const d of ds) {
+          const pp = document.createElementNS(SVG_NS, 'path');
+          pp.setAttribute('d', d);
+          pp.setAttribute('fill', 'none');
+          pp.setAttribute('stroke', '#2563eb');
+          pp.setAttribute('stroke-width', '1.5');
+          pp.setAttribute('stroke-dasharray', '4 2');
+          pp.setAttribute('vector-effect', 'non-scaling-stroke');
+          pg.appendChild(pp);
+        }
+        g.appendChild(pg);
+        outlined = true;
+      }
+    } catch { /* fall back to the box below */ }
+
+    if (!outlined) {
+      const poly = document.createElementNS(SVG_NS, 'rect');
+      poly.setAttribute('x', lb[0]);
+      poly.setAttribute('y', lb[1]);
+      poly.setAttribute('width', lb[2] - lb[0]);
+      poly.setAttribute('height', lb[3] - lb[1]);
+      poly.setAttribute('fill', 'none');
+      poly.setAttribute('stroke', '#2563eb');
+      poly.setAttribute('stroke-width', '1.5');
+      poly.setAttribute('stroke-dasharray', '4 2');
+      poly.setAttribute('vector-effect', 'non-scaling-stroke');
+      g.appendChild(poly);
+    }
+
+    // Handles are sized in SCREEN pixels: the gizmo lives in the layer's own
+    // frame, so a fixed local size would balloon with the layer's scale.
+    const svgRect = this.svg.getBoundingClientRect();
+    const vb = this.svg.viewBox?.baseVal;
+    const pxPerDoc = (vb && vb.width > 0) ? (svgRect.width / vb.width) : 1;
+    const perLocal = Math.max(1e-9, (Math.hypot(m[0], m[1]) || 1) * pxPerDoc);
+    const px = (n) => n / perLocal;
+
+    // Rotation handle: a dot just INSIDE the top edge.  Outside the shape it
+    // falls off-screen whenever the layer fills the sheet, which is the
+    // normal case here.
+    const cxLocal = (lb[0] + lb[2]) / 2;
+    const stemLen = Math.min(px(20), (lb[3] - lb[1]) * 0.4);
+    const stem = document.createElementNS(SVG_NS, 'line');
+    stem.setAttribute('x1', cxLocal);
+    stem.setAttribute('y1', lb[1]);
+    stem.setAttribute('x2', cxLocal);
+    stem.setAttribute('y2', lb[1] + stemLen);
+    stem.setAttribute('stroke', '#2563eb');
+    stem.setAttribute('stroke-width', '1.5');
+    stem.setAttribute('vector-effect', 'non-scaling-stroke');
+    g.appendChild(stem);
+
+    const rot = document.createElementNS(SVG_NS, 'circle');
+    rot.setAttribute('cx', cxLocal);
+    rot.setAttribute('cy', lb[1] + stemLen);
+    rot.setAttribute('r', px(7));
+    rot.setAttribute('fill', '#2563eb');
+    rot.setAttribute('stroke', '#fff');
+    rot.setAttribute('stroke-width', '1');
+    rot.setAttribute('vector-effect', 'non-scaling-stroke');
+    rot.dataset.handle = 'rotate';
+    rot.style.cursor = 'grab';
+    rot.style.pointerEvents = 'auto';
+    const rotTitle = document.createElementNS(SVG_NS, 'title');
+    rotTitle.textContent = 'Arrastra para rotar (Shift: pasos de 15°)';
+    rot.appendChild(rotTitle);
+    g.appendChild(rot);
 
     // Nested children have no scale handle: their scale is always the
     // largest that fits the parent contour at their position.
@@ -337,12 +401,13 @@ export class Viewport2D {
     const handle = document.createElementNS(SVG_NS, 'rect');
     // Place the scale handle on the visual bottom-right after flip:
     // with flip_h, local +X becomes visual −X, so use the local left edge.
-    const hx = node.flip_h ? (lb[0] - 4) : (lb[2] - 4);
-    const hy = lb[3] - 4;
+    const hs = px(9);
+    const hx = node.flip_h ? (lb[0] - hs / 2) : (lb[2] - hs / 2);
+    const hy = lb[3] - hs / 2;
     handle.setAttribute('x', hx);
     handle.setAttribute('y', hy);
-    handle.setAttribute('width', 8);
-    handle.setAttribute('height', 8);
+    handle.setAttribute('width', hs);
+    handle.setAttribute('height', hs);
     handle.setAttribute('fill', '#2563eb');
     handle.setAttribute('stroke', '#fff');
     handle.setAttribute('stroke-width', '1');
@@ -351,8 +416,8 @@ export class Viewport2D {
     handle.style.cursor = 'nwse-resize';
     handle.style.pointerEvents = 'auto';
     if (node.flip_h) {
-      const cx = hx + 4;
-      const cy = hy + 4;
+      const cx = hx + hs / 2;
+      const cy = hy + hs / 2;
       handle.setAttribute(
         'transform',
         `translate(${cx} ${cy}) scale(-1 1) translate(${-cx} ${-cy})`,
