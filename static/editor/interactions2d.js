@@ -153,7 +153,9 @@ export class Interactions2D {
       seen.add(cur);
       const n = store.layerById(cur);
       if (!n) break;
-      chain.unshift(affine.layerMatrix(n));
+      // Ancestors contribute their POSE only: flip_h mirrors a layer's own
+      // geometry, never its children (same model as the server's world_pose).
+      chain.unshift(affine.matrix(n.pose));
       cur = n.parent_id;
     }
     let m = affine.identity();
@@ -193,6 +195,11 @@ export class Interactions2D {
     if (layerEl) {
       const layerId = layerEl.dataset.layerId;
       const node = store.layerById(layerId);
+      // Marco: ignore — clicks pass through / pan; only the panel edits it.
+      if (node && this.viewport._isFrameLayer?.(node)) {
+        this._startPan(e);
+        return;
+      }
       if (node?.locked) {
         this._flash('Capa bloqueada.');
         return;
@@ -307,14 +314,141 @@ export class Interactions2D {
       pose = { ...g.startPose, angle_deg: g.startPose.angle_deg + (ang - g.startAngle) };
     }
     if (pose) {
-      pose = this._maybeClampPose(g.layerId, pose);
+      if (g.kind === 'drag' && g.serverPose && g.serverPoseFor) {
+        // Once the server has answered, show ITS pose (size AND the centre it
+        // settled on), displaced only by how far the pointer moved since that
+        // request.  The preview is then exactly what the drop commits.
+        const raw = pose;
+        g.lastRawPose = raw;
+        const shifted = {
+          ...g.serverPose,
+          tx: g.serverPose.tx + (raw.tx - g.serverPoseFor.tx),
+          ty: g.serverPose.ty + (raw.ty - g.serverPoseFor.ty),
+        };
+        // The client clamp returns the LARGEST size its (optimistic) test
+        // accepts; never show more than the server said — only less, when
+        // the pointer dragged the piece somewhere the server size no longer fits.
+        const clamped = this._maybeClampPose(g.layerId, shifted);
+        pose = (clamped.scale + 1e-9 >= shifted.scale) ? shifted : clamped;
+      } else {
+        g.lastRawPose = pose;
+        pose = this._maybeClampPose(g.layerId, pose);
+        // Before the first server answer never GROW on the client's optimistic
+        // estimate — only shrink when it stops fitting.  Growth always comes
+        // from the server, so the piece never overshoots and snaps back.
+        if (g.kind === 'drag' && g.startPose && pose.scale > g.startPose.scale) {
+          pose = { ...pose, scale: g.startPose.scale };
+        }
+      }
       this._previewPose(g.layerId, pose);
+      if (g.kind === 'drag') this._scheduleServerPreview(g, g.lastRawPose);
     }
+  }
+
+  /**
+   * Live server fit (fast profile) while dragging a nested child, one request
+   * in flight at a time.  The answer replaces the preview, so the size the
+   * user sees while moving is the size that gets committed on release.
+   */
+  _scheduleServerPreview(g, rawPose) {
+    const node = store.layerById(g.layerId);
+    if (!node?.parent_id || !(store.matrioskaMode || store.fitToCanvas)) return;
+    if (!rawPose) return;
+    // Only ask again once the pointer has really moved since the last answer
+    // (or request): a still hand must not trigger a stream of re-fits.
+    const ref = g.serverPoseFor || g.previewSentFor;
+    if (ref && Math.hypot(rawPose.tx - ref.tx, rawPose.ty - ref.ty) < 1.5) return;
+    g.previewWanted = { tx: rawPose.tx, ty: rawPose.ty, angle_deg: rawPose.angle_deg, scale: rawPose.scale };
+    if (g.previewInFlight) return;
+    const run = async () => {
+      const want = g.previewWanted;
+      if (!want) { g.previewInFlight = false; return; }
+      g.previewWanted = null;
+      g.previewInFlight = true;
+      g.previewSentFor = { tx: want.tx, ty: want.ty };
+      try {
+        const res = await fetch(
+          `${store.baseUrl}/documents/${encodeURIComponent(store.doc.id)}/fit`,
+          {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              layer_id: g.layerId,
+              target: 'parent_shape',
+              mode: 'at_position',
+              quality: 'preview',
+              pose: { tx: want.tx, ty: want.ty, scale: want.scale, angle_deg: want.angle_deg },
+              padding_mm: this._childPaddingMm(node),
+              angles_deg: [want.angle_deg],
+              request_seq: Date.now(),
+            }),
+          },
+        );
+        const body = await res.json().catch(() => ({}));
+        const p = body.pose_local || body.pose;
+        if (res.ok && p && Number(p.scale) > 0 && this._gesture === g) {
+          const next = {
+            tx: Number(p.tx), ty: Number(p.ty), scale: Number(p.scale), angle_deg: Number(p.angle_deg),
+          };
+          // Hysteresis against flicker: keep the pose we already show unless
+          // the new one is clearly bigger, or the old one no longer fits where
+          // the pointer is now.
+          if (g.serverPose && g.serverPoseFor) {
+            const prevShifted = {
+              ...g.serverPose,
+              tx: g.serverPose.tx + (want.tx - g.serverPoseFor.tx),
+              ty: g.serverPose.ty + (want.ty - g.serverPoseFor.ty),
+            };
+            const stillFits = this._maybeClampPose(g.layerId, prevShifted).scale + 1e-9 >= prevShifted.scale;
+            if (stillFits && next.scale < prevShifted.scale * 1.04) {
+              g.serverPose = prevShifted;
+              g.serverPoseFor = { tx: want.tx, ty: want.ty };
+              g.serverPoseExact = false; // translated by hand → re-fit on drop
+              g.previewInFlight = false;
+              if (g.previewWanted && this._gesture === g) run();
+              return;
+            }
+          }
+          g.serverPose = next;
+          g.serverPoseFor = { tx: want.tx, ty: want.ty };
+          g.serverPoseExact = true;
+          // Show the server answer, displaced by the pointer movement since.
+          const cur = g.lastRawPose || want;
+          const shown = {
+            ...g.serverPose,
+            tx: g.serverPose.tx + (cur.tx - want.tx),
+            ty: g.serverPose.ty + (cur.ty - want.ty),
+          };
+          const clamped = this._maybeClampPose(g.layerId, shown);
+          this._previewPose(g.layerId, (clamped.scale + 1e-9 >= shown.scale) ? shown : clamped);
+        }
+      } catch (err) {
+        console.warn('preview fit failed', err);
+      }
+      g.previewInFlight = false;
+      if (g.previewWanted && this._gesture === g) run();
+    };
+    run();
   }
 
   /**
    * Fit canvas → clamp roots to usable sheet (rect).
    * Matrioska / nested → clamp children to parent SVG contour (not AABB).
+   */
+  /** Global child↔parent clearance (mm) from the panel, else the layer's fit config. */
+  _childPaddingMm(node) {
+    const el = document.getElementById('matrioska-padding-mm');
+    const v = parseFloat(el?.value);
+    if (Number.isFinite(v) && v >= 0) return v;
+    const fromLayer = Number(node?.fit?.padding_mm ?? 0);
+    return Number.isFinite(fromLayer) && fromLayer >= 0 ? fromLayer : 0;
+  }
+
+  /**
+   * Roots → clamp to the usable sheet (rect).
+   * Nested children → while dragging, the child always takes the LARGEST
+   * scale that fits the parent contour at the pointer position (padding
+   * included); if nothing fits at that centre it is walked back inside.
    */
   _maybeClampPose(layerId, pose) {
     const node = store.layerById(layerId);
@@ -332,17 +466,20 @@ export class Interactions2D {
         const parent = store.layerById(node.parent_id);
         const pAsset = store.assetById(parent?.asset_id);
         if (!pAsset) return pose;
-        const padEl = document.getElementById('matrioska-padding-enabled');
-        const padMmEl = document.getElementById('matrioska-padding-mm');
-        let padding = Number(node.fit?.padding_mm ?? 0);
-        if (padEl?.checked) {
-          const v = parseFloat(padMmEl?.value);
-          padding = Number.isFinite(v) && v >= 0 ? v : 0;
+        const padding = this._childPaddingMm(node);
+        const opts = { flipChild: !!node.flip_h, flipParent: !!parent.flip_h, inflate: true };
+        const g = this._gesture;
+        // Cache the sampled outlines for the whole gesture.
+        if (g && g.layerId === layerId) {
+          if (!g._childPts) g._childPts = affine.sampleLocalOutline(asset, 220);
+          if (!g._parentPath) g._parentPath = affine.localPath2D(pAsset);
+          opts.childPts = g._childPts;
+          opts.parentPath = g._parentPath;
         }
-        return affine.clampPoseInsideSilhouette(asset, pAsset, pose, padding, {
-          flipChild: !!node.flip_h,
-          flipParent: !!parent.flip_h,
-        });
+        const grown = affine.maxScalePoseAtCenter(asset, pAsset, pose, padding, opts);
+        if (grown) return grown;
+        const clamped = affine.clampPoseInsideSilhouette(asset, pAsset, pose, padding, opts);
+        return affine.maxScalePoseAtCenter(asset, pAsset, clamped, padding, opts) || clamped;
       }
     } catch {
       return pose;
@@ -395,45 +532,104 @@ export class Interactions2D {
       return;
     }
     this.pushHistory();
+    if (g.kind === 'drag' && g.serverPose && g.serverPoseFor && g.lastRawPose) {
+      const d = Math.hypot(g.serverPoseFor.tx - g.lastRawPose.tx, g.serverPoseFor.ty - g.lastRawPose.ty);
+      if (d < 0.25 && g.serverPoseExact) {
+        // The preview on screen IS the server answer for this spot: commit it
+        // as-is, no second fit, no size jump.
+        this._commitPose(pending.layerId, g.serverPose, { skipServerFit: true });
+        return;
+      }
+      // Shown pose = a server answer translated by hand: keep it, only make
+      // sure it is valid (constrain shrinks in place if it is not).
+      const shown = {
+        ...g.serverPose,
+        tx: g.serverPose.tx + (g.lastRawPose.tx - g.serverPoseFor.tx),
+        ty: g.serverPose.ty + (g.lastRawPose.ty - g.serverPoseFor.ty),
+      };
+      this._commitPose(pending.layerId, shown, { constrainOnly: true });
+      return;
+    }
     this._commitPose(pending.layerId, pending.pose);
   }
 
-  async _commitPose(layerId, pose) {
-    let finalPose = pose;
+  async _commitPose(layerId, pose, { skipServerFit = false, constrainOnly = false } = {}) {
+    const cleaned = {
+      tx: Number(pose.tx),
+      ty: Number(pose.ty),
+      scale: Number(pose.scale),
+      angle_deg: Number(pose.angle_deg),
+    };
+    let finalPose = cleaned;
     const node = store.layerById(layerId);
-    // Nested matrioska: authoritative contour constrain (Shapely) before commit.
-    if (node?.parent_id && (store.matrioskaMode || store.fitToCanvas)) {
-      try {
-        const padEl = document.getElementById('matrioska-padding-enabled');
-        const padMmEl = document.getElementById('matrioska-padding-mm');
-        let padding = Number(node.fit?.padding_mm ?? 0);
-        if (padEl?.checked) {
-          const v = parseFloat(padMmEl?.value);
-          padding = Number.isFinite(v) && v >= 0 ? v : 0;
+    // Undo must return to the pre-gesture state, not to the optimistic pose.
+    if (typeof store._snapshot === 'function' && Array.isArray(store.history)) {
+      store._pendingHistorySnapshot = store._snapshot();
+    }
+    // Optimistic: keep the gestured size on screen while constrain/commit run.
+    // Otherwise a click-outside renderLayers during the await flashes the old pose.
+    if (node) node.pose = { ...cleaned };
+    this.viewport.renderLayers();
+    this.viewport.renderSelection();
+
+    // Nested child: exact server fit at the dropped centre (max scale that
+    // fits the parent contour with padding, siblings as obstacles).
+    if (!skipServerFit && node?.parent_id && (store.matrioskaMode || store.fitToCanvas)) {
+      const padding = this._childPaddingMm(node);
+      const docUrl = `${store.baseUrl}/documents/${encodeURIComponent(store.doc.id)}`;
+      let fitted = null;
+      if (!constrainOnly) try {
+        const res = await fetch(`${docUrl}/fit`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            layer_id: layerId,
+            target: 'parent_shape',
+            mode: 'at_position',
+            quality: 'preview', // same profile as the live preview → same size
+            pose: cleaned,
+            padding_mm: padding,
+            angles_deg: [cleaned.angle_deg],
+            request_seq: Date.now(),
+          }),
+        });
+        const body = await res.json().catch(() => ({}));
+        const p = body.pose_local || body.pose;
+        if (res.ok && p && Number(p.scale) > 0) {
+          fitted = {
+            tx: Number(p.tx), ty: Number(p.ty), scale: Number(p.scale), angle_deg: Number(p.angle_deg),
+          };
         }
-        const res = await fetch(
-          `${store.baseUrl}/documents/${encodeURIComponent(store.doc.id)}/constrain`,
-          {
+      } catch (err) {
+        console.warn('fit at_position failed', err);
+      }
+      if (!fitted) {
+        try {
+          const res = await fetch(`${docUrl}/constrain`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-              layer_id: layerId,
-              pose,
-              padding_mm: padding,
-            }),
-          },
-        );
-        const body = await res.json().catch(() => ({}));
-        if (res.ok && body.pose) finalPose = body.pose;
-      } catch (err) {
-        console.warn('constrain failed, using client pose', err);
+            body: JSON.stringify({ layer_id: layerId, pose: cleaned, padding_mm: padding }),
+          });
+          const body = await res.json().catch(() => ({}));
+          if (res.ok && body.pose) {
+            fitted = {
+              tx: Number(body.pose.tx), ty: Number(body.pose.ty),
+              scale: Number(body.pose.scale), angle_deg: Number(body.pose.angle_deg),
+            };
+          }
+        } catch (err) {
+          console.warn('constrain failed, using client pose', err);
+        }
       }
+      if (fitted) finalPose = fitted;
     }
     try {
       await store.commitCommand('set_pose', {
         layer_id: layerId,
         pose: finalPose,
       });
+      const live = store.layerById(layerId);
+      if (live) live.pose = { ...finalPose };
       this.viewport.renderLayers();
       this.viewport.renderSelection();
       window.dispatchEvent(new CustomEvent('editor:pose-changed', { detail: { layerId } }));

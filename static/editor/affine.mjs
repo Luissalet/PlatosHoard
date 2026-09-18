@@ -448,3 +448,77 @@ export function clampPoseInsideSilhouette(childAsset, parentAsset, pose, padding
   best = searchAt(gx, gy, p.scale);
   return best || { tx: gx, ty: gy, scale: Math.max(1e-6, p.scale * 0.05), angle_deg: p.angle_deg };
 }
+
+/**
+ * Largest uniform scale of the child at the pose's centre that keeps its SVG
+ * contour inside the parent contour (client hit-test, live drag preview).
+ * Returns null when nothing fits at that centre (e.g. centre outside parent).
+ * The server ``/fit`` (mode ``at_position``) gives the exact answer on drop.
+ */
+export function maxScalePoseAtCenter(childAsset, parentAsset, pose, paddingMm = 0, {
+  flipChild = false,
+  flipParent = false,
+  childPts = null,
+  parentPath = null,
+  inflate = false,
+} = {}) {
+  const pts = childPts || sampleLocalOutline(childAsset, 96);
+  const path = parentPath || localPath2D(parentAsset);
+  if (!pts.length || !path) return null;
+  const opts = { flipChild: !!flipChild, flipParent: !!flipParent };
+  const base = {
+    tx: Number(pose.tx) || 0,
+    ty: Number(pose.ty) || 0,
+    scale: Math.max(1e-6, Number(pose.scale) || 1),
+    angle_deg: Number(pose.angle_deg) || 0,
+  };
+  const fits = (s) => poseInsideParentSilhouette(pts, { ...base, scale: s }, path, paddingMm, opts);
+
+  // Upper bound from bounding boxes (parent-local mm both sides).
+  const cb = measureLocalBounds(childAsset) || childAsset?.local_bounds;
+  const pb = measureLocalBounds(parentAsset) || parentAsset?.local_bounds;
+  let upper = base.scale * 4;
+  if (cb && pb) {
+    const cw = Math.max(1e-6, cb[2] - cb[0]), ch = Math.max(1e-6, cb[3] - cb[1]);
+    const pw = pb[2] - pb[0], ph = pb[3] - pb[1];
+    upper = Math.max(1e-6, Math.min(Math.max(pw / cw, ph / ch), Math.max(pw, ph) / Math.min(cw, ch)));
+  }
+
+  // Sweep downwards (containment is not monotonic in general), then bisect.
+  let hi = null, lo = null;
+  let s = upper;
+  for (let i = 0; i < 48 && s > upper * 1e-3; i++) {
+    if (fits(s)) { lo = s; break; }
+    hi = s;
+    s *= 0.88;
+  }
+  if (lo === null) return null;
+  if (hi !== null) {
+    for (let i = 0; i < 14; i++) {
+      const mid = Math.sqrt(lo * hi);
+      if (fits(mid)) lo = mid; else hi = mid;
+    }
+  }
+  let out = { ...base, scale: lo };
+  if (!inflate) return out;
+
+  // Inflate: let the centre drift a little so the shape keeps growing until
+  // it is wedged (≥ 2 contact sides) — same idea as the server's local fit.
+  const fitsAt = (tx, ty, sc) => poseInsideParentSilhouette(pts, { ...base, tx, ty, scale: sc }, path, paddingMm, opts);
+  const dirs = [[1, 0], [-1, 0], [0, 1], [0, -1], [1, 1], [1, -1], [-1, 1], [-1, -1]];
+  let step = Math.max(0.5, (pb ? Math.max(pb[2] - pb[0], pb[3] - pb[1]) : 100) * 0.02);
+  for (let iter = 0; iter < 24 && step >= 0.25; iter++) {
+    const grown = out.scale * 1.03;
+    let moved = false;
+    for (const [dx, dy] of dirs) {
+      const tx = out.tx + dx * step, ty = out.ty + dy * step;
+      if (fitsAt(tx, ty, grown)) {
+        out = { ...out, tx, ty, scale: grown };
+        moved = true;
+        break;
+      }
+    }
+    if (!moved) step *= 0.5;
+  }
+  return out;
+}

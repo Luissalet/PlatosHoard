@@ -78,6 +78,7 @@ export class LayerTree {
       row.classList.remove('dragging');
       this.el.querySelectorAll('.drop-before,.drop-after,.drop-into')
         .forEach((el) => el.classList.remove('drop-before', 'drop-after', 'drop-into'));
+      document.querySelector('.editor-main')?.classList.remove('drop-active');
     });
     row.addEventListener('dragover', (e) => {
       e.preventDefault();

@@ -1,15 +1,15 @@
 """Rectangular box frame (marco) around the inverse / canvas.
 
-Two laser-cut pieces forming a tray:
+One solid tray piece for 3D printing:
 
-* **Fondo** — solid outer rectangle (the floor of the box).
-* **Paredes** — outer − inner ring (the walls) that sits on the floor.
+* Plan silhouette — solid outer rectangle (floor footprint).
+* Z — floor thickness + walls up to ``wall_h_mm`` (open top cavity).
 
 Parameters:
 
 * ``padding_mm`` — gap between canvas / inverse edge and the inner opening
 * ``wall_w_mm`` — wall thickness in plan, equal on all four sides
-* ``wall_h_mm`` — wall height (Z extrusion of the four walls)
+* ``wall_h_mm`` — total tray height (Z); floor uses ``floor_h_mm`` (default 3)
 """
 from __future__ import annotations
 
@@ -24,6 +24,7 @@ from shapely.geometry.base import BaseGeometry
 from .transforms import TransformError, _finite
 
 FRAME_LAYER_NAMES = frozenset({"Marco", "Marco fondo", "Marco paredes"})
+DEFAULT_FLOOR_H_MM = 3.0
 
 
 def frame_dimensions(
@@ -33,17 +34,23 @@ def frame_dimensions(
     padding_mm: float,
     wall_w_mm: float,
     wall_h_mm: float,
+    floor_h_mm: float = DEFAULT_FLOOR_H_MM,
 ) -> dict[str, float]:
-    """Return inner/outer plan sizes + wall height for a frame around W×H."""
+    """Return inner/outer plan sizes + tray heights for a frame around W×H."""
     W = _finite(canvas_w, "canvas_w", positive=True)
     H = _finite(canvas_h, "canvas_h", positive=True)
     pad = _finite(padding_mm, "padding_mm", nonnegative=True)
     ww = _finite(wall_w_mm, "wall_w_mm", positive=True)
     wh = _finite(wall_h_mm, "wall_h_mm", positive=True)
-    if not all(math.isfinite(v) for v in (W, H, pad, ww, wh)):
+    fh = _finite(floor_h_mm, "floor_h_mm", positive=True)
+    if not all(math.isfinite(v) for v in (W, H, pad, ww, wh, fh)):
         raise TransformError("INVALID_NUMBER", "frame dimensions must be finite")
+    # Floor must be thinner than total height (open-top tray).
+    if fh >= wh:
+        fh = max(wh * 0.25, min(DEFAULT_FLOOR_H_MM, wh * 0.45))
+        if fh >= wh:
+            fh = wh * 0.5
 
-    # Plan: walls expand equally on all four sides.
     inner_w = W + 2.0 * pad
     inner_h = H + 2.0 * pad
     outer_w = inner_w + 2.0 * ww
@@ -53,7 +60,8 @@ def frame_dimensions(
         "canvas_h": H,
         "padding_mm": pad,
         "wall_w_mm": ww,
-        "wall_h_mm": wh,  # Z height of walls (extrusion), not plan size
+        "wall_h_mm": wh,
+        "floor_h_mm": fh,
         "inner_w": inner_w,
         "inner_h": inner_h,
         "outer_w": outer_w,
@@ -70,6 +78,11 @@ def build_frame_floor(dims: dict[str, float]) -> BaseGeometry:
     return floor
 
 
+def build_frame_tray(dims: dict[str, float]) -> BaseGeometry:
+    """Plan silhouette of the solid tray (= solid outer rectangle)."""
+    return build_frame_floor(dims)
+
+
 def build_frame_ring(dims: dict[str, float]) -> BaseGeometry:
     """Outer − inner rectangle; wall thickness equal on all four sides."""
     ow, oh = dims["outer_w"], dims["outer_h"]
@@ -83,8 +96,8 @@ def build_frame_ring(dims: dict[str, float]) -> BaseGeometry:
     return ring
 
 
-def floor_svg(dims: dict[str, float]) -> str:
-    """Solid rectangle SVG for the box floor."""
+def tray_svg(dims: dict[str, float]) -> str:
+    """Solid rectangle SVG for the tray footprint."""
     ow, oh = dims["outer_w"], dims["outer_h"]
     d = f"M0,0 H{ow:g} V{oh:g} H0 Z"
     return (
@@ -95,8 +108,13 @@ def floor_svg(dims: dict[str, float]) -> str:
     )
 
 
+def floor_svg(dims: dict[str, float]) -> str:
+    """Alias kept for callers; same as tray footprint SVG."""
+    return tray_svg(dims)
+
+
 def frame_svg(dims: dict[str, float]) -> str:
-    """Even-odd SVG for the wall ring in source mm."""
+    """Even-odd SVG for the wall ring in source mm (legacy helper)."""
     ow, oh = dims["outer_w"], dims["outer_h"]
     iw, ih = dims["inner_w"], dims["inner_h"]
     ww = dims["wall_w_mm"]
@@ -142,7 +160,17 @@ def _asset_dict(
             "angle_deg": 0.0,
         },
         "geometry_hash": sha,
-        "trace_settings": {"kind": kind},
+        "trace_settings": {
+            "kind": kind,
+            "wall_w_mm": float(dims["wall_w_mm"]),
+            "wall_h_mm": float(dims["wall_h_mm"]),
+            "floor_h_mm": float(dims["floor_h_mm"]),
+            "padding_mm": float(dims["padding_mm"]),
+            "inner_w": float(dims["inner_w"]),
+            "inner_h": float(dims["inner_h"]),
+            "outer_w": float(dims["outer_w"]),
+            "outer_h": float(dims["outer_h"]),
+        },
         "curve_tolerance_source": 0.02,
         "local_bounds": [-ow / 2.0, -oh / 2.0, ow / 2.0, oh / 2.0],
         "canonical_svg": svg,
@@ -170,45 +198,40 @@ def build_frame_box_assets_and_layers(
     padding_mm: float = 1.0,
     wall_w_mm: float = 12.0,
     wall_h_mm: float = 12.0,
-) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
-    """Build fondo + paredes assets/layers for ``add_layers``.
+    floor_h_mm: float = DEFAULT_FLOOR_H_MM,
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]], dict[str, float]]:
+    """Build a single solid Marco tray asset/layer for ``add_layers``.
 
     ``wall_w_mm`` = plan thickness (equal on 4 sides).
-    ``wall_h_mm`` = Z height of paredes (set as ``extrusion_mm`` by the caller).
+    ``wall_h_mm`` = total tray height (layer ``extrusion_mm``).
+    ``floor_h_mm`` = floor thickness inside the tray (must be < wall_h).
     """
     dims = frame_dimensions(
         canvas_w, canvas_h,
         padding_mm=padding_mm,
         wall_w_mm=wall_w_mm,
         wall_h_mm=wall_h_mm,
+        floor_h_mm=floor_h_mm,
     )
-    svg_floor = floor_svg(dims)
-    svg_walls = frame_svg(dims)
+    svg = tray_svg(dims)
     uid = uuid.uuid4().hex[:10]
-    aid_floor = f"asset_marco_fondo_{hashlib.sha256(svg_floor.encode()).hexdigest()[:10]}"
-    aid_walls = f"asset_marco_paredes_{hashlib.sha256(svg_walls.encode()).hexdigest()[:10]}"
-    lid_floor = f"layer_marco_fondo_{uid}"
-    lid_walls = f"layer_marco_paredes_{uid}"
+    aid = f"asset_marco_{hashlib.sha256(svg.encode()).hexdigest()[:10]}"
+    lid = f"layer_marco_{uid}"
 
     assets = [
         _asset_dict(
-            aid=aid_floor, name="Marco fondo", filename="marco_fondo.svg",
-            svg=svg_floor, dims=dims, kind="procedural_frame_floor",
-        ),
-        _asset_dict(
-            aid=aid_walls, name="Marco paredes", filename="marco_paredes.svg",
-            svg=svg_walls, dims=dims, kind="procedural_frame_walls",
+            aid=aid, name="Marco", filename="marco_tray.svg",
+            svg=svg, dims=dims, kind="procedural_frame_tray",
         ),
     ]
     layers = [
-        _centred_layer(lid_floor, aid_floor, "Marco fondo", dims),
-        _centred_layer(lid_walls, aid_walls, "Marco paredes", dims),
+        _centred_layer(lid, aid, "Marco", dims),
     ]
     return assets, layers, dims
 
 
 def is_frame_layer_name(name: str | None, layer_id: str | None = None) -> bool:
-    """True for procedural marco box layers (legacy ring included)."""
+    """True for procedural marco tray layers (legacy fondo/paredes included)."""
     if (name or "") in FRAME_LAYER_NAMES:
         return True
     return str(layer_id or "").startswith("layer_marco_")
@@ -221,6 +244,7 @@ def build_frame_asset_and_layer(
     padding_mm: float = 1.0,
     wall_w_mm: float = 12.0,
     wall_h_mm: float = 12.0,
+    floor_h_mm: float = DEFAULT_FLOOR_H_MM,
     layer_id: str | None = None,
     asset_id: str | None = None,
 ) -> tuple[dict[str, Any], dict[str, Any]]:
@@ -229,11 +253,12 @@ def build_frame_asset_and_layer(
         padding_mm=padding_mm,
         wall_w_mm=wall_w_mm,
         wall_h_mm=wall_h_mm,
+        floor_h_mm=floor_h_mm,
     )
-    walls_a, walls_l = assets[1], layers[1]
+    a, layer = assets[0], layers[0]
     if asset_id:
-        walls_a = {**walls_a, "id": asset_id}
-        walls_l = {**walls_l, "asset_id": asset_id}
+        a = {**a, "id": asset_id}
+        layer = {**layer, "asset_id": asset_id}
     if layer_id:
-        walls_l = {**walls_l, "id": layer_id}
-    return walls_a, walls_l
+        layer = {**layer, "id": layer_id}
+    return a, layer

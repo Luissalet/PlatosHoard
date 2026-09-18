@@ -14,6 +14,7 @@ export class EditorStore {
     this.fitToCanvas = false;   // constrain + max-fit roots to usable canvas
     this.matrioskaMode = false; // constrain + max-fit children inside parent silhouette
     this._commandSeq = 0;
+    this._pendingHistorySnapshot = null; // pre-action state handed over by a gesture
     // Undo/redo history (spec §13.4): confirmed contents only, max 100 actions.
     this.history = [];           // snapshots: {assets, layers}
     this.historyIndex = -1;      // index of the current state in history
@@ -107,7 +108,11 @@ export class EditorStore {
     if (this.historyIndex < this.history.length - 1) {
       this.history.length = this.historyIndex + 1;
     }
-    this.history.push(this._snapshot());
+    // A gesture may have written an optimistic pose into the doc before the
+    // commit; it hands us the true pre-action snapshot through this field.
+    const snap = this._pendingHistorySnapshot || this._snapshot();
+    this._pendingHistorySnapshot = null;
+    this.history.push(snap);
     if (this.history.length > 100) this.history.shift();
     this.historyIndex = this.history.length - 1;
   }

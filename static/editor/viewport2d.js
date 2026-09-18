@@ -227,6 +227,10 @@ export class Viewport2D {
 
     // Hit-test: the group itself catches pointer events on filled areas.
     // Holes (evenodd) are transparent to hits → click selects what's behind.
+    // Marco is scene furniture — only the panel may change it.
+    if (this._isFrameLayer(node)) {
+      g.style.pointerEvents = 'none';
+    }
     g.style.color = this._layerColor(layerId);
     return g;
   }
@@ -240,14 +244,10 @@ export class Viewport2D {
       seen.add(cur);
       const node = store.layerById(cur);
       if (!node) break;
-      // Prefer layerMatrix (pose · flip_h); fall back if cache is stale.
-      let lm;
-      if (typeof affine.layerMatrix === 'function') {
-        lm = affine.layerMatrix(node);
-      } else {
-        lm = affine.matrix(node.pose);
-        if (node.flip_h) lm = affine.multiply(lm, [-1, 0, 0, 1, 0, 0]);
-      }
+      // Only the layer itself is mirrored by flip_h; ancestors contribute
+      // their pose only (children are never flipped by a parent's flip).
+      let lm = affine.matrix(node.pose);
+      if (cur === layerId && node.flip_h) lm = affine.multiply(lm, [-1, 0, 0, 1, 0, 0]);
       chain.unshift(lm);
       cur = node.parent_id;
     }
@@ -302,29 +302,24 @@ export class Viewport2D {
     if (!store.selectedId) return;
     const node = store.layerById(store.selectedId);
     if (!node) return;
-    const el = this._layerEls.get(store.selectedId);
-    if (!el) return;
-
-    // Draw the box in the SAME local space + transform as the layer group.
-    // That way it cannot drift from the rendered silhouette.
-    let bb;
-    try {
-      bb = el.getBBox();
-    } catch {
-      return;
-    }
-    if (!(bb.width > 0) || !(bb.height > 0)) return;
+    // No gizmo for locked / marco — pose is not editable from the canvas.
+    if (node.locked || this._isFrameLayer(node)) return;
+    const asset = store.assetById(node.asset_id);
+    // Prefer asset.local_bounds (local mm) over getBBox(source units): getBBox
+    // + world transform can produce a giant dashed rect across the whole UI.
+    const lb = asset?.local_bounds;
+    if (!lb || !(lb[2] > lb[0]) || !(lb[3] > lb[1])) return;
 
     const g = document.createElementNS(SVG_NS, 'g');
-    const xf = el.getAttribute('transform');
-    if (xf) g.setAttribute('transform', xf);
+    const m = this._layerMatrix(store.selectedId);
+    g.setAttribute('transform', `matrix(${m.join(' ')})`);
     g.setAttribute('pointer-events', 'none');
 
     const poly = document.createElementNS(SVG_NS, 'rect');
-    poly.setAttribute('x', bb.x);
-    poly.setAttribute('y', bb.y);
-    poly.setAttribute('width', bb.width);
-    poly.setAttribute('height', bb.height);
+    poly.setAttribute('x', lb[0]);
+    poly.setAttribute('y', lb[1]);
+    poly.setAttribute('width', lb[2] - lb[0]);
+    poly.setAttribute('height', lb[3] - lb[1]);
     poly.setAttribute('fill', 'none');
     poly.setAttribute('stroke', '#2563eb');
     poly.setAttribute('stroke-width', '1.5');
@@ -332,11 +327,18 @@ export class Viewport2D {
     poly.setAttribute('vector-effect', 'non-scaling-stroke');
     g.appendChild(poly);
 
+    // Nested children have no scale handle: their scale is always the
+    // largest that fits the parent contour at their position.
+    if (node.parent_id) {
+      this.handles.appendChild(g);
+      return;
+    }
+
     const handle = document.createElementNS(SVG_NS, 'rect');
     // Place the scale handle on the visual bottom-right after flip:
     // with flip_h, local +X becomes visual −X, so use the local left edge.
-    const hx = node.flip_h ? (bb.x - 4) : (bb.x + bb.width - 4);
-    const hy = bb.y + bb.height - 4;
+    const hx = node.flip_h ? (lb[0] - 4) : (lb[2] - 4);
+    const hy = lb[3] - 4;
     handle.setAttribute('x', hx);
     handle.setAttribute('y', hy);
     handle.setAttribute('width', 8);
@@ -348,7 +350,6 @@ export class Viewport2D {
     handle.dataset.handle = 'scale';
     handle.style.cursor = 'nwse-resize';
     handle.style.pointerEvents = 'auto';
-    // Keep the handle square on screen: cancel the layer's local flip.
     if (node.flip_h) {
       const cx = hx + 4;
       const cy = hy + 4;
@@ -374,6 +375,7 @@ export class Viewport2D {
     for (const layerId of ordered) {
       const node = store.layerById(layerId);
       if (!node || !this._effectiveVisible(node)) continue;
+      if (this._isFrameLayer(node)) continue; // not selectable in 2D
       const el = this._layerEls.get(layerId);
       if (!el) continue;
       const asset = store.assetById(node.asset_id);

@@ -138,7 +138,9 @@ button:disabled {
   flex-direction: column;
   gap: 12px;
   min-height: 0;
-  overflow: auto;
+  min-width: 0;
+  overflow-y: auto;
+  overflow-x: hidden;
 }
 
 .hint {
@@ -310,86 +312,6 @@ button:disabled {
   margin-top: 8px;
 }
 
-.panel-vista {
-  border-color: var(--accent);
-}
-.vista-list {
-  display: flex;
-  flex-direction: column;
-  gap: 4px;
-}
-.vista-row {
-  display: grid;
-  grid-template-columns: 18px minmax(0, 1fr);
-  grid-template-rows: auto auto;
-  column-gap: 10px;
-  row-gap: 1px;
-  align-items: start;
-  margin: 0;
-  padding: 7px 8px;
-  background: transparent;
-  border: 1px solid transparent;
-  border-radius: 6px;
-  cursor: pointer;
-  color: var(--text);
-}
-.vista-row:hover {
-  background: var(--panel-2);
-  border-color: var(--border);
-}
-.vista-row:has(input:checked) {
-  background: color-mix(in srgb, var(--accent) 12%, transparent);
-  border-color: color-mix(in srgb, var(--accent) 35%, var(--border));
-}
-.vista-row input {
-  grid-column: 1;
-  grid-row: 1 / span 2;
-  width: 15px;
-  height: 15px;
-  margin: 2px 0 0;
-  accent-color: var(--accent);
-  align-self: start;
-}
-.vista-title {
-  grid-column: 2;
-  grid-row: 1;
-  font-size: 0.84rem;
-  font-weight: 650;
-  color: var(--text);
-  line-height: 1.25;
-}
-.vista-row:has(input:checked) .vista-title {
-  color: var(--accent);
-}
-.vista-desc {
-  grid-column: 2;
-  grid-row: 2;
-  font-size: 0.72rem;
-  color: var(--muted);
-  line-height: 1.25;
-}
-
-.marco-box {
-  margin-top: 10px;
-  padding: 8px;
-  border: 1px solid var(--border);
-  border-radius: 8px;
-  background: var(--panel-2);
-  display: flex;
-  flex-direction: column;
-  gap: 6px;
-}
-.marco-title {
-  font-weight: 650;
-  font-size: 0.84rem;
-}
-.marco-box .insp-row {
-  margin: 0;
-}
-.marco-box .insp-row input[type="number"] {
-  width: 72px;
-}
-
 .fit-status {
   margin-top: 10px;
   min-height: 20px;
@@ -425,10 +347,9 @@ button:disabled {
 }
 
 .viewer-panel {
-  flex: 1 1 auto;
+  flex: 0 0 auto;
   display: flex;
   flex-direction: column;
-  min-height: 280px;
   min-width: 0;
 }
 
@@ -438,8 +359,8 @@ button:disabled {
   flex: 1 1 auto;
   width: 100%;
   min-width: 0;
-  min-height: 240px;
-  height: 280px;
+  min-height: 220px;
+  height: 260px;
   border: 1px solid var(--border);
   border-radius: 8px;
   background: #1f2937;
@@ -473,4 +394,200 @@ button:disabled {
     min-width: 260px;
     flex: 1;
   }
+}
+
+/* ---- Toolbar polish ------------------------------------------------- */
+.brand {
+  font-weight: 700;
+  letter-spacing: 0.02em;
+  margin-right: 6px;
+  color: var(--text);
+}
+.toolbar-sep {
+  width: 1px;
+  height: 22px;
+  background: var(--border);
+  margin: 0 4px;
+}
+.toolbar-label {
+  color: var(--muted);
+  font-size: 0.72rem;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  margin: 0 2px 0 6px;
+}
+.canvas-controls .dir {
+  display: inline-block;
+  width: 12px;
+  text-align: center;
+  color: var(--muted);
+}
+.canvas-controls input[type="number"] {
+  width: 60px;
+  padding: 4px 5px;
+}
+.btn-ghost {
+  background: var(--panel-2);
+  border: 1px solid var(--border);
+  color: var(--text);
+}
+.btn-ghost:hover:not(:disabled) {
+  border-color: var(--accent);
+}
+.btn-secondary {
+  background: var(--panel-2);
+  border: 1px solid var(--accent);
+  color: var(--accent);
+}
+.btn-secondary:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--accent) 18%, var(--panel-2));
+}
+.btn-primary {
+  background: var(--accent);
+  color: #fff;
+  font-weight: 650;
+}
+.btn-big {
+  width: 100%;
+  padding: 12px 14px;
+  font-size: 1rem;
+  border-radius: 8px;
+  box-shadow: 0 6px 18px rgba(79, 140, 255, 0.25);
+}
+.btn-big:hover:not(:disabled) {
+  filter: brightness(1.08);
+}
+.btn-big.busy {
+  background: var(--panel-2);
+  color: var(--muted);
+  box-shadow: none;
+}
+
+/* ---- Step panels ----------------------------------------------------- */
+.step-panel h2 {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.step-num {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 20px;
+  height: 20px;
+  border-radius: 50%;
+  background: var(--accent);
+  color: #fff;
+  font-size: 0.72rem;
+  font-weight: 700;
+  letter-spacing: 0;
+}
+
+.dropzone {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 2px;
+  padding: 16px 10px;
+  margin-bottom: 10px;
+  border: 2px dashed var(--border);
+  border-radius: 10px;
+  background: var(--panel-2);
+  cursor: pointer;
+  text-align: center;
+  transition: border-color 0.15s, background 0.15s;
+}
+.dropzone:hover,
+.editor-main.drop-active .dropzone {
+  border-color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 10%, var(--panel-2));
+}
+.dropzone input[type="file"] {
+  position: absolute;
+  inset: 0;
+  opacity: 0;
+  cursor: pointer;
+}
+.dropzone:has(input:disabled) {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+.dz-icon {
+  font-size: 1.4rem;
+  color: var(--accent);
+  line-height: 1;
+}
+.dz-title {
+  font-weight: 650;
+  font-size: 0.9rem;
+}
+.dz-sub {
+  color: var(--muted);
+  font-size: 0.72rem;
+}
+.layer-tree {
+  min-height: 60px;
+  max-height: 34vh;
+  overflow: auto;
+}
+
+.field-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px 10px;
+}
+.field {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  font-size: 0.74rem;
+  color: var(--muted);
+}
+.field-input {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+.field-input input[type="number"] {
+  width: 100%;
+  min-width: 0;
+  padding: 5px 6px;
+}
+.field-input .unit {
+  font-size: 0.72rem;
+  color: var(--muted);
+}
+
+.export-options {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin-top: 10px;
+}
+.export-options .checkbox-row {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  margin: 0;
+  font-size: 0.78rem;
+  color: var(--muted);
+}
+.export-options select {
+  flex: 1 1 120px;
+  min-width: 0;
+  padding: 4px 6px;
+  font-size: 0.78rem;
+}
+.export-options .btn-ghost {
+  padding: 4px 8px;
+  font-size: 0.78rem;
+}
+
+/* ---- Selection handles ---------------------------------------------- */
+.editor-main.drop-active {
+  outline: 3px dashed var(--accent);
+  outline-offset: -6px;
 }

@@ -89,11 +89,7 @@ def _validate_pose(pose: Any) -> None:
             "INVALID_NUMBER",
             f"pose.scale must be > 0, got {pose['scale']!r}",
         )
-    if set(pose.keys()) - set(required):
-        raise CommandError(
-            "INVALID_STRUCTURE",
-            f"pose has unauthorized fields: {sorted(set(pose.keys()) - set(required))}",
-        )
+    # Extra keys (e.g. client metadata) are ignored — only the four fields are stored.
 
 
 # ---------------------------------------------------------------------------
@@ -103,8 +99,18 @@ def _validate_pose(pose: Any) -> None:
 
 def cmd_set_pose(doc: dict, payload: Mapping[str, Any]) -> dict:
     """Move / scale / rotate one layer (one gesture)."""
+    from .frame import is_frame_layer_name
+
     layer_id = payload.get("layer_id")
     layer = _require_layer(doc, layer_id)
+    if is_frame_layer_name(layer.get("name"), layer_id):
+        raise CommandError(
+            "LOCKED",
+            "marco pose is fixed; regenerate from the Marco panel",
+            status=423,
+            layer_id=layer_id,
+            details={"locked_ids": [layer_id]},
+        )
     if layer.get("locked", False):
         raise CommandError("LOCKED", f"layer {layer_id!r} is locked", status=423,
                            layer_id=layer_id, details={"locked_ids": [layer_id]})
@@ -176,8 +182,11 @@ _LAYER_PROPERTY_FIELDS = frozenset(
 
 def cmd_set_layer_properties(doc: dict, payload: Mapping[str, Any]) -> dict:
     """Update a whitelist of layer fields.  Rejects everything else."""
+    from .frame import is_frame_layer_name
+
     layer_id = payload.get("layer_id")
     layer = _require_layer(doc, layer_id)
+    is_frame = is_frame_layer_name(layer.get("name"), layer_id)
 
     # Accept either a nested ``fields`` object or flat keys (the client sends
     # flat keys, e.g. {layer_id, name, visible}).  Both are whitelisted below.
@@ -207,6 +216,23 @@ def cmd_set_layer_properties(doc: dict, payload: Mapping[str, Any]) -> dict:
         elif key in ("visible", "locked", "export_enabled", "flip_h"):
             if not isinstance(value, bool):
                 raise CommandError("INVALID_STRUCTURE", f"{key} must be a boolean")
+            # Marco stays locked and unflipped — edit only via generate_frame.
+            if is_frame and key == "locked" and value is False:
+                raise CommandError(
+                    "LOCKED",
+                    "marco stays locked; regenerate from the Marco panel",
+                    status=423,
+                    layer_id=layer_id,
+                    details={"locked_ids": [layer_id]},
+                )
+            if is_frame and key == "flip_h" and value is True:
+                raise CommandError(
+                    "LOCKED",
+                    "marco cannot be flipped",
+                    status=423,
+                    layer_id=layer_id,
+                    details={"locked_ids": [layer_id]},
+                )
             layer[key] = value
         elif key == "extrusion_mm":
             if value is not None:
@@ -557,14 +583,14 @@ def cmd_apply_fit_result(doc: dict, payload: Mapping[str, Any]) -> dict:
 
 
 def cmd_generate_frame(doc: dict, payload: Mapping[str, Any]) -> dict:
-    """Create or replace a box marco: solid floor + wall ring around the canvas.
+    """Create or replace a single solid Marco tray around the canvas.
 
     Payload:
         ``padding_mm`` (≥ 0): gap between canvas edge and inner opening
         ``wall_w_mm`` (> 0): wall thickness in plan, equal on all four sides
-        ``wall_h_mm`` (> 0): height (Z) of the four walls → paredes extrusion
+        ``wall_h_mm`` (> 0): total tray height (Z) → layer extrusion
 
-    Layers (bottom → top): ``Marco fondo``, ``Marco paredes``.
+    Replaces any legacy fondo/paredes layers with one ``Marco`` piece.
     """
     from .frame import FRAME_LAYER_NAMES, build_frame_box_assets_and_layers, is_frame_layer_name
     from .transforms import TransformError
@@ -602,7 +628,7 @@ def cmd_generate_frame(doc: dict, payload: Mapping[str, Any]) -> dict:
         fname = a.get("source_filename") or ""
         if aid not in still_used and (
             str(aid).startswith("asset_marco_")
-            or fname in ("marco_frame.svg", "marco_fondo.svg", "marco_paredes.svg")
+            or fname in ("marco_frame.svg", "marco_fondo.svg", "marco_paredes.svg", "marco_tray.svg")
             or (a.get("name") or "") in FRAME_LAYER_NAMES
         ):
             assets.pop(aid, None)
@@ -618,28 +644,27 @@ def cmd_generate_frame(doc: dict, payload: Mapping[str, Any]) -> dict:
         raise CommandError(exc.code, exc.message, status=422) from exc
 
     doc = cmd_add_layers(doc, {"assets": frame_assets, "layers": frame_layers})
-    fondo_id = frame_layers[0]["id"]
-    paredes_id = frame_layers[1]["id"]
-    # Vertical = height of all four walls (extrusion of the ring piece).
-    doc["layers"][paredes_id]["extrusion_mm"] = float(dims["wall_h_mm"])
+    marco_id = frame_layers[0]["id"]
+    doc["layers"][marco_id]["extrusion_mm"] = float(dims["wall_h_mm"])
+    # Pose is fixed to the canvas; only the Marco panel may change it (regen).
+    doc["layers"][marco_id]["locked"] = True
 
-    # Stack: fondo (0), paredes (1), then the rest.
     others = sorted(
-        (lid for lid in doc["layers"] if lid not in (fondo_id, paredes_id)),
+        (lid for lid in doc["layers"] if lid != marco_id),
         key=lambda lid: doc["layers"][lid].get("stack_rank", 0),
     )
-    cmd_set_stack_order(doc, {"order": [fondo_id, paredes_id] + others})
+    cmd_set_stack_order(doc, {"order": [marco_id] + others})
     root_ids = [
         lid for lid, n in doc["layers"].items()
         if n.get("parent_id") is None
     ]
     roots_rest = sorted(
-        (lid for lid in root_ids if lid not in (fondo_id, paredes_id)),
+        (lid for lid in root_ids if lid != marco_id),
         key=lambda lid: doc["layers"][lid].get("order", 0),
     )
     cmd_reorder_siblings(doc, {
         "parent_id": None,
-        "order": [fondo_id, paredes_id] + roots_rest,
+        "order": [marco_id] + roots_rest,
     })
     return doc
 

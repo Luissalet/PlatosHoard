@@ -230,6 +230,8 @@ class ExportItem:
     geometry: BaseGeometry
     pose: Pose
     extrusion_mm: float
+    tray_wall_w_mm: Optional[float] = None
+    tray_floor_h_mm: Optional[float] = None
 
 
 ALLOWED_FAMILIES = frozenset({
@@ -287,9 +289,9 @@ def build_export_plan(
     first (``resolve_export_selection``).  All geometry is in document mm;
     plan construction never mutates the document.
 
-    Procedural marco layers (fondo / paredes) are exported once under the
-    ``marco/`` stem as family ``marco``, regardless of requested families —
-    they are intentionally larger than the canvas and skip inverse/fullframe.
+    Procedural marco tray layers are exported once under the ``marco/`` stem
+    as family ``marco``, regardless of requested families — they sit outside
+    the canvas and skip inverse/fullframe.
     """
     if len(set(selected_ids)) != len(selected_ids):
         raise ExportError("DUPLICATE_SELECTION", "Repeated layer ID")
@@ -325,12 +327,25 @@ def build_export_plan(
         rank = node.get("stack_rank", 0)
         slug = f"{rank:02d}_{safe_slug(node.get('name', lid))}_{safe_slug(lid)}"
 
-        # Marco box pieces: one normal cut each, own folder, may sit outside C.
+        # Solid Marco tray: one piece under marco/, may sit outside C.
         if is_frame_layer_name(node.get("name"), lid):
             pose = world_pose(lid, layers)
             shape = apply_pose(base_geom, pose)
             require_shape(shape, f"export {lid}/marco")
-            result.append(ExportItem(f"marco/{slug}", lid, "marco", shape, pose, h))
+            ts = asset.get("trace_settings") or {}
+            try:
+                wall_w = float(ts["wall_w_mm"]) if "wall_w_mm" in ts else None
+            except (TypeError, ValueError):
+                wall_w = None
+            try:
+                floor_h = float(ts.get("floor_h_mm") or 3.0)
+            except (TypeError, ValueError):
+                floor_h = 3.0
+            result.append(ExportItem(
+                f"marco/{slug}", lid, "marco", shape, pose, h,
+                tray_wall_w_mm=wall_w,
+                tray_floor_h_mm=floor_h,
+            ))
             continue
 
         for family in families:
@@ -433,7 +448,21 @@ def pack_bundle(
                 elif fmt == "png":
                     data = geometry_png(geom, bw, bh, png_width_px)
                 else:
-                    data = stl_exporter(geom, item.extrusion_mm, bh)
+                    if (
+                        item.family == "marco"
+                        and item.tray_wall_w_mm
+                        and item.tray_floor_h_mm
+                    ):
+                        from .mesh_adapter import export_tray_stl
+                        data = export_tray_stl(
+                            geom,
+                            wall_w_mm=float(item.tray_wall_w_mm),
+                            wall_h_mm=float(item.extrusion_mm),
+                            floor_h_mm=float(item.tray_floor_h_mm),
+                            canvas_height_mm=bh,
+                        )
+                    else:
+                        data = stl_exporter(geom, item.extrusion_mm, bh)
                 z.writestr(name, data)
                 record["files"].append({
                     "path": name,

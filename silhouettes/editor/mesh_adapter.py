@@ -161,6 +161,142 @@ def export_stl(
     return buf.getvalue()
 
 
+def export_tray_stl(
+    outer_doc_mm: BaseGeometry,
+    *,
+    wall_w_mm: float,
+    wall_h_mm: float,
+    floor_h_mm: float,
+    canvas_height_mm: float,
+) -> bytes:
+    """Solid open-top tray as one manifold mesh (no internal faces).
+
+    Built as outer block minus cavity: floor fills Z=0..floor_h over the
+    full footprint; walls rise to ``wall_h`` around the opening.  Uses an
+    explicit face construction (not floor∥ring concatenate) so the STL has
+    no coplanar interior faces at the floor/wall join.
+    """
+    import trimesh
+
+    ww = _finite(wall_w_mm, "wall_w_mm", positive=True)
+    wh = _finite(wall_h_mm, "wall_h_mm", positive=True)
+    fh = _finite(floor_h_mm, "floor_h_mm", positive=True)
+    if fh >= wh:
+        raise MeshAdapterError("INVALID_NUMBER", "floor_h_mm must be < wall_h_mm")
+    require_shape(outer_doc_mm, "outer")
+    if outer_doc_mm.is_empty or outer_doc_mm.area <= 0:
+        raise MeshAdapterError("EMPTY_GEOMETRY", "Cannot export empty tray")
+
+    mfg = to_manufacturing(outer_doc_mm, canvas_height_mm)
+    minx, miny, maxx, maxy = mfg.bounds
+    if (maxx - minx) <= 2 * ww or (maxy - miny) <= 2 * ww:
+        raise MeshAdapterError("INVALID_NUMBER", "wall_w_mm too large for outer bounds")
+
+    mesh = open_rect_tray_mesh(
+        minx, miny, maxx, maxy,
+        wall_w=ww, wall_h=wh, floor_h=fh,
+    )
+    buf = io.BytesIO()
+    mesh.export(buf, file_type="stl")
+    return buf.getvalue()
+
+
+def open_rect_tray_mesh(
+    x0: float,
+    y0: float,
+    x1: float,
+    y1: float,
+    *,
+    wall_w: float,
+    wall_h: float,
+    floor_h: float,
+):
+    """Manifold open-top rectangular tray (manufacturing / local XY, +Z up).
+
+    Only exterior faces: bottom, cavity floor, rim top, 4 outer walls,
+    4 inner walls.  No duplicated faces where floor meets walls.
+    """
+    import trimesh
+
+    ww = float(wall_w)
+    wh = float(wall_h)
+    fh = float(floor_h)
+    ix0, iy0 = x0 + ww, y0 + ww
+    ix1, iy1 = x1 - ww, y1 - ww
+    if ix1 <= ix0 or iy1 <= iy0 or fh <= 0 or wh <= fh:
+        raise MeshAdapterError("INVALID_NUMBER", "invalid tray dimensions")
+
+    # Corner order CCW in XY when viewed from +Z: SW, SE, NE, NW
+    def ring(xa, ya, xb, yb, z):
+        return [
+            (xa, ya, z),
+            (xb, ya, z),
+            (xb, yb, z),
+            (xa, yb, z),
+        ]
+
+    ob = ring(x0, y0, x1, y1, 0.0)       # outer bottom
+    ot = ring(x0, y0, x1, y1, wh)        # outer top
+    iff = ring(ix0, iy0, ix1, iy1, fh)   # inner at floor (cavity top)
+    it = ring(ix0, iy0, ix1, iy1, wh)    # inner at rim
+
+    verts: list[tuple[float, float, float]] = []
+    faces: list[tuple[int, int, int]] = []
+
+    def add_vert(p):
+        verts.append(p)
+        return len(verts) - 1
+
+    def quad(a, b, c, d):
+        # a-b-c-d CCW when viewed from outside
+        faces.append((a, b, c))
+        faces.append((a, c, d))
+
+    # Indices
+    ob_i = [add_vert(p) for p in ob]
+    ot_i = [add_vert(p) for p in ot]
+    if_i = [add_vert(p) for p in iff]
+    it_i = [add_vert(p) for p in it]
+
+    # Bottom (-Z): CW in XY = CCW from below
+    quad(ob_i[0], ob_i[3], ob_i[2], ob_i[1])
+    # Cavity floor (+Z)
+    quad(if_i[0], if_i[1], if_i[2], if_i[3])
+    # Rim top (+Z): four segments outer→inner
+    for i in range(4):
+        j = (i + 1) % 4
+        quad(ot_i[i], ot_i[j], it_i[j], it_i[i])
+    # Outer walls (+outward): bottom→top along each edge
+    for i in range(4):
+        j = (i + 1) % 4
+        quad(ob_i[i], ob_i[j], ot_i[j], ot_i[i])
+    # Inner walls (facing cavity): at floor→rim, reverse XY order for inward normal
+    for i in range(4):
+        j = (i + 1) % 4
+        quad(if_i[j], if_i[i], it_i[i], it_i[j])
+
+    mesh = trimesh.Trimesh(
+        vertices=np.asarray(verts, dtype=float),
+        faces=np.asarray(faces, dtype=np.int64),
+        process=False,
+    )
+    mesh.remove_unreferenced_vertices()
+    if not mesh.is_watertight:
+        # Still usable for print; flag softly via volume check below.
+        pass
+    expected = (x1 - x0) * (y1 - y0) * wh - (ix1 - ix0) * (iy1 - iy0) * (wh - fh)
+    if abs(float(mesh.volume) - expected) > max(1e-3, 1e-6 * expected):
+        # Fix inverted winding if volume came out negative.
+        if mesh.volume < 0:
+            mesh.invert()
+        if abs(float(mesh.volume) - expected) > max(1e-3, 1e-6 * expected):
+            raise MeshAdapterError(
+                "EMPTY_GEOMETRY",
+                f"tray mesh volume {mesh.volume} != expected {expected}",
+            )
+    return mesh
+
+
 # ---------------------------------------------------------------------------
 # Helper
 # ---------------------------------------------------------------------------

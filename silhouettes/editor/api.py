@@ -175,16 +175,35 @@ def _run_fit_sync(doc: dict, body: dict) -> dict:
     max_eval = int(body.get("max_evaluations", 4000))
     seed = int(body.get("seed", 42))
     mode = body.get("mode", "best")  # "best" | "at_position"
+    fast = body.get("quality") == "preview"  # live-drag profile
 
     node = doc["layers"][layer_id]
     local_geom = _local_geom_for_layer(doc, layer_id)
+
+    def _current_world_pose() -> Pose:
+        """World pose of the layer, or of the proposed local ``pose`` if the
+        client sent one (live drag: the document still holds the old pose)."""
+        raw = body.get("pose")
+        if isinstance(raw, dict):
+            try:
+                proposed = Pose(
+                    tx=float(raw.get("tx", 0)), ty=float(raw.get("ty", 0)),
+                    scale=float(raw.get("scale", 1)), angle_deg=float(raw.get("angle_deg", 0)),
+                )
+            except (TypeError, ValueError) as exc:
+                raise CommandError("INVALID_NUMBER", "pose must be numeric", status=400) from exc
+            pid = node.get("parent_id")
+            if pid is not None:
+                return compose_pose(world_pose(pid, doc["layers"]), proposed)
+            return proposed
+        return world_pose(layer_id, doc["layers"])
 
     if target == "canvas":
         canvas = doc["canvas"]
         container = inner_canvas(canvas["width_mm"], canvas["height_mm"], canvas["padding_mm"])
         if mode == "at_position":
             # Keep centre, only grow/shrink to fit usable canvas.
-            wp = world_pose(layer_id, doc["layers"])
+            wp = _current_world_pose()
             fr = fit_inside(
                 local_geom, container,
                 padding_mm=padding,
@@ -233,10 +252,13 @@ def _run_fit_sync(doc: dict, body: dict) -> dict:
         else:
             container = parent_geom
 
-        fixed = None
+        hint = None
         if mode == "at_position":
-            wp = world_pose(layer_id, doc["layers"])
-            fixed = (wp.tx, wp.ty)
+            # Local optimum near the dropped centre: the child fills the
+            # pocket it landed in (wedged on ≥ 2 sides), never just one edge.
+            wp = _current_world_pose()
+            hint = (wp.tx, wp.ty)
+            angles = [wp.angle_deg]
 
         # Sibling obstacles (other children of the same parent)
         obstacles = []
@@ -255,12 +277,13 @@ def _run_fit_sync(doc: dict, body: dict) -> dict:
         fr = fit_inside(
             local_geom, container,
             padding_mm=padding,
-            fixed_center=fixed,
+            center_hint=hint,
             angles_deg=angles,
             obstacles=obstacles,
             sibling_gap_mm=float((node.get("fit") or {}).get("sibling_gap_mm") or 2.0),
             max_evaluations=max_eval,
             seed=seed,
+            fast=fast,
         )
         if fr.pose is None:
             raise FittingError(fr.status, f"no feasible pose ({fr.status})")
@@ -475,6 +498,8 @@ def post_fit(doc_id: str) -> Any:
 
     Body: {layer_id, target: "canvas"|"parent_shape"|"parent_hole",
            mode: "best"|"at_position",
+           pose?: {tx,ty,scale,angle_deg}   # local pose whose centre to use
+                                            # (at_position during a live drag)
            padding_mm, angles_deg, max_evaluations, seed, request_seq,
            async: false}
 
@@ -794,6 +819,8 @@ def post_exports(doc_id: str) -> Any:
             "extrusion_mm": item.extrusion_mm,
             "geom_hex": base64.b64encode(wkb_dumps(item.geometry)).decode("ascii"),
             "pose": _pose_to_dict(item.pose) if item.pose is not None else None,
+            "tray_wall_w_mm": item.tray_wall_w_mm,
+            "tray_floor_h_mm": item.tray_floor_h_mm,
         })
 
     payload = {

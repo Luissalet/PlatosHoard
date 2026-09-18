@@ -23,7 +23,7 @@ function isMarcoLayer(layer) {
 
 export class ExportDialog {
   /**
-   * @param {object} els  { recipeSelect, exportSelected, exportBatch, fitStatus }
+   * @param {object} els  { recipeSelect, exportSelected, exportBatch, fitStatus, formats?: () => string[] }
    */
   constructor(els) {
     this.els = els;
@@ -35,14 +35,16 @@ export class ExportDialog {
     this.els.exportBatch?.addEventListener('click', () => this._export(true));
   }
 
-  _activeFamilies() {
+  _activeFamilies(batch = false) {
     const sel = this.els.recipeSelect;
-    if (!sel) return FAMILIES.map(f => f.id);
+    if (batch || !sel) return FAMILIES.map(f => f.id);
     if (sel.value === 'batch_all') return FAMILIES.map(f => f.id);
     return [sel.value];
   }
 
   _activeFormats() {
+    const custom = this.els.formats?.();
+    if (Array.isArray(custom) && custom.length) return custom;
     return FORMATS.map(f => f.id);
   }
 
@@ -53,8 +55,7 @@ export class ExportDialog {
   }
 
   updateCounter() {
-    const batchish = this.els.recipeSelect?.value === 'batch_all';
-    const ids = this._selectedLayerIds(batchish);
+    const ids = this._selectedLayerIds(true);
     const layers = store.doc?.layers || {};
     let sil = 0;
     let marco = 0;
@@ -62,15 +63,24 @@ export class ExportDialog {
       if (isMarcoLayer(layers[id])) marco += 1;
       else sil += 1;
     }
-    const fams = this._activeFamilies().length;
-    const fmts = this._activeFormats().length;
-    // Marco always exports once (normal), independent of family count.
-    const pieces = sil * fams + marco;
-    const files = pieces * fmts;
+    const fmts = this._activeFormats();
+    // Batch = always the 4 families; marco exports once, independent of families.
+    const pieces = sil * FAMILIES.length + marco;
+    const files = pieces * fmts.length;
     const el = this.els.fitStatus;
     if (el) {
-      el.textContent = `${pieces} piezas · ${files} archivos + manifest.json`;
+      el.textContent = sil
+        ? `${pieces} piezas · ${files} archivos (${fmts.map((f) => f.toUpperCase()).join('+')}) + manifest.json`
+        : 'Importa siluetas para exportar.';
     }
+  }
+
+  _setBusy(busy) {
+    const b = this.els.exportBatch;
+    if (!b) return;
+    b.classList.toggle('busy', !!busy);
+    b.disabled = !!busy;
+    if (!busy) b.textContent = 'Generar 4 STL';
   }
 
   async _export(batch) {
@@ -80,13 +90,14 @@ export class ExportDialog {
     if (!layerIds.length) { set('Nada seleccionado.'); return; }
 
     set('Enviando exportación…');
+    this._setBusy(true);
     try {
       const res = await fetch(`${store.baseUrl}/documents/${encodeURIComponent(store.doc.id)}/exports`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           layer_ids: layerIds,
-          families: this._activeFamilies(),
+          families: this._activeFamilies(batch),
           formats: this._activeFormats(),
           png_width_px: 1000,
           request_seq: Date.now(),
@@ -97,10 +108,12 @@ export class ExportDialog {
         throw new Error(body?.error?.message || `HTTP ${res.status}`);
       }
       const job = await res.json();
-      set(`Trabajo ${job.id} en cola…`);
-      this._pollJob(job.id);
+      set('En cola…');
+      await this._pollJob(job.id);
     } catch (err) {
       set(`Error: ${err.message}`);
+    } finally {
+      this._setBusy(false);
     }
   }
 
@@ -138,7 +151,9 @@ export class ExportDialog {
         return;
       }
       if (job.state === 'cancelled') { set('Trabajo cancelado.'); return; }
-      set(`Trabajando… (${job.progress ?? ''})`);
+      const b = this.els.exportBatch;
+      if (b && b.classList.contains('busy')) b.textContent = `Generando… ${job.progress ?? ''}`;
+      set(`Trabajando… ${job.progress ?? ''}`);
     }
     set('Tiempo de espera agotado; consulta el trabajo más tarde.');
   }

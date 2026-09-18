@@ -1,6 +1,11 @@
 // editor.js — mounts the editor (tasks 07, 08, 09, 16, 21)
 // Wires: store, viewport2d, layer_tree, inspector, interactions2d,
-// export_dialog, viewer3d, and the toolbar (new/save/open/import/fit).
+// export_dialog, two viewer3d instances and the toolbar.
+//
+// Flow (siempre activo, sin modos):
+//   1. Fotos  → importar / soltar PNG-SVG  → se apilan matrioska y encajan solas
+//   2. Encaje → holgura, marco (siempre generado, se redimensiona solo)
+//   3. Export → un botón: 4 familias (+ marco) en STL
 import { store } from './store.js';
 import { Viewport2D } from './viewport2d.js';
 import { LayerTree } from './layer_tree.js';
@@ -12,25 +17,42 @@ import * as affine from './affine.mjs';
 
 function $(id) { return document.getElementById(id); }
 
+/** Pose payload with only the four canonical fields (no client metadata). */
+function cleanPose(pose) {
+  return {
+    tx: Number(pose.tx),
+    ty: Number(pose.ty),
+    scale: Number(pose.scale),
+    angle_deg: Number(pose.angle_deg),
+  };
+}
+
+function isMarcoLayer(node) {
+  const name = node?.name || '';
+  return name === 'Marco' || name === 'Marco fondo' || name === 'Marco paredes'
+    || String(node?.id || '').startsWith('layer_marco_');
+}
+
+/** Silhouette layers eligible for matrioska stacking (excludes marco / locked). */
+function matrioskaLayers() {
+  return Object.values(store.doc?.layers || {}).filter(
+    (l) => l && !l.locked && !isMarcoLayer(l),
+  );
+}
+
+let _matrioskaBusy = false;
+
+const TOOLBAR_IDS = ['editor-new', 'editor-save', 'editor-open', 'editor-undo', 'editor-redo', 'import-files'];
+const CANVAS_IDS = ['canvas-width-mm', 'canvas-height-mm', 'canvas-padding-top',
+                    'canvas-padding-right', 'canvas-padding-bottom', 'canvas-padding-left'];
+const PANEL_IDS = ['recipe-select', 'export-selected', 'export-batch', 'export-fmt-svg', 'export-fmt-png',
+                   'fit-best', 'matrioska-stack', 'matrioska-padding-mm',
+                   'marco-wall-w', 'marco-wall-h', 'marco-padding'];
+
 function enableToolbar(hasDoc) {
-  for (const id of ['editor-new', 'editor-save', 'editor-open', 'editor-undo', 'editor-redo', 'import-files']) {
+  for (const id of [...TOOLBAR_IDS, ...CANVAS_IDS, ...PANEL_IDS]) {
     const el = $(id);
     if (el) el.disabled = !hasDoc;
-  }
-  for (const id of ['canvas-width-mm', 'canvas-height-mm', 'canvas-padding-top',
-                    'canvas-padding-right', 'canvas-padding-bottom', 'canvas-padding-left']) {
-    const el = $(id);
-    if (el) el.disabled = !hasDoc;
-  }
-  for (const id of ['recipe-select', 'export-selected', 'export-batch', 'fit-best', 'fit-at-position',
-                    'matrioska-mode', 'view-inverse', 'fit-to-canvas', 'matrioska-stack',
-                    'matrioska-padding-enabled', 'matrioska-padding-mm', 'auto-scale-drag',
-                    'marco-wall-w', 'marco-wall-h', 'marco-padding', 'marco-generate']) {
-    const el = $(id);
-    if (el) el.disabled = !hasDoc;
-  }
-  if (hasDoc && $('matrioska-mode') && !$('matrioska-mode').dataset.userTouched) {
-    $('matrioska-mode').checked = true;
   }
 }
 
@@ -55,26 +77,32 @@ async function applyCanvas() {
     bottom: parseFloat($('canvas-padding-bottom').value) || 0,
     left: parseFloat($('canvas-padding-left').value) || 0,
   };
-  if (!(w > 0) || !(h > 0)) { flash('Canvas inválido.'); return; }
+  if (!(w > 0) || !(h > 0)) { flash('Lienzo inválido.'); return; }
   try {
     await store.commitCommand('set_canvas', {
       width_mm: w, height_mm: h, padding_mm: p, resize_policy: 'keep_layers',
     });
-    if (store.fitToCanvas) await applyFitToCanvasAll();
-    viewport.renderCanvas();
-    viewport.renderLayers();
+    // Roots re-fit to the new usable sheet, children re-fit into their parents,
+    // and the marco follows the new canvas size.
+    await applyFitToCanvasAll({ silent: true });
+    await applyMatrioskaFitAll({ silent: true });
+    await ensureMarco({ force: true });
+    refreshAll();
     viewport.fitToCanvas();
-    window.dispatchEvent(new CustomEvent('editor:doc-changed'));
+    flash(`Lienzo ${w}×${h} mm.`);
   } catch (err) { flash(err.message); }
 }
 
 function flash(msg) {
   const el = $('fit-status');
-  if (el) { el.textContent = msg; setTimeout(() => { el.textContent = ''; }, 3500); }
+  if (el) { el.textContent = msg; setTimeout(() => { if (el.textContent === msg) el.textContent = ''; }, 4000); }
 }
 
-async function importFiles(input) {
-  const files = [...(input.files || [])];
+// ---------------------------------------------------------------------------
+// Import → auto-arrange
+// ---------------------------------------------------------------------------
+
+async function importFileList(files) {
   if (!files.length || !store.doc) return;
   const fd = new FormData();
   for (const f of files) fd.append('files[]', f, f.name);
@@ -91,19 +119,40 @@ async function importFiles(input) {
     }
     const out = await res.json();
     store._applyDocumentPayload(out);
-    // If payload didn't stick (stale client), reload from server.
     if (!Object.keys(store.doc?.layers || {}).length && store.doc?.id) {
       await store.loadDocument(store.doc.id);
     }
-    input.value = '';
     refreshAll();
     viewport.applyViewport();
     viewport.fitToCanvas();
-    const n = Object.keys(store.doc?.layers || {}).length;
-    flash(n ? `Importados ${out.imported ?? n} asset(s).` : 'Importó assets pero no hay capas.');
+    await autoArrange();
   } catch (err) {
     flash(`Importación fallida: ${err.message}`);
   }
+}
+
+async function importFiles(input) {
+  const files = [...(input.files || [])];
+  input.value = '';
+  await importFileList(files);
+}
+
+/**
+ * Everything the user would otherwise click: ≥2 silhouettes → stack
+ * matrioska (largest outside); 1 → fit to canvas.  The marco always exists.
+ */
+async function autoArrange() {
+  const layers = matrioskaLayers();
+  if (layers.length >= 2) {
+    await stackMatrioska();
+  } else {
+    await applyFitToCanvasAll({ silent: true });
+  }
+  await ensureMarco();
+  refreshAll();
+  requestAnimationFrame(() => viewport.fitToCanvas());
+  const n = layers.length;
+  flash(n ? `${n} silueta(s) listas. Pulsa «Generar 4 STL».` : 'Importó assets pero no hay capas.');
 }
 
 async function saveProject() {
@@ -138,6 +187,7 @@ async function openProject(input) {
     }
     store._applyDocumentPayload(await res.json());
     store.selectedId = null;
+    await ensureMarco();
     refreshAll();
     requestAnimationFrame(() => viewport.fitToCanvas());
     flash('Proyecto abierto.');
@@ -146,73 +196,35 @@ async function openProject(input) {
   }
 }
 
-async function runFit(mode = 'best') {
+// ---------------------------------------------------------------------------
+// Fitting
+// ---------------------------------------------------------------------------
+
+async function runFit() {
   if (!store.selectedId) { flash('Selecciona una capa primero.'); return; }
   const node = store.layerById(store.selectedId);
   if (!node) return;
-  const matrioska = !!$('matrioska-mode')?.checked;
-  let target = 'canvas';
-  if (node.parent_id) {
-    target = 'parent_shape';
-  } else if (matrioska) {
-    flash('Modo matrioska: anida la capa dentro de otra (arrastra al centro de la fila) antes de encajar.');
-    return;
-  }
-  const padding = matrioskaPaddingMm(node);
-  flash(mode === 'at_position' ? 'Ajustando escala en posición…' : 'Buscando mejor posición…');
+  if (isMarcoLayer(node)) { flash('El marco se redimensiona solo.'); return; }
+  flash('Buscando mejor posición…');
   try {
-    const res = await fetch(`${store.baseUrl}/documents/${encodeURIComponent(store.doc.id)}/fit`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        layer_id: store.selectedId,
-        target,
-        mode,
-        padding_mm: Number.isFinite(padding) ? padding : 2.0,
-        angles_deg: [0],
-        max_evaluations: matrioska ? 6000 : 2000,
-        seed: 42,
-        request_seq: Date.now(),
-      }),
-    });
-    const body = await res.json().catch(() => ({}));
-    if (!res.ok) {
-      throw new Error(body?.error?.message || `HTTP ${res.status}`);
+    if (node.parent_id) {
+      const pose = await fitChildIntoParentPose(node.id, node.parent_id);
+      await store.commitCommand('set_pose', { layer_id: node.id, pose: cleanPose(pose) });
+    } else {
+      const rect = affine.usableCanvasRect(store.doc.canvas);
+      const asset = store.assetById(node.asset_id);
+      const pose = affine.fitPoseToRect(asset.local_bounds, rect, node.pose?.angle_deg || 0);
+      await store.commitCommand('apply_fit_result', {
+        layer_id: node.id, pose: cleanPose(pose), base_revision: store.revision,
+      });
     }
-    // Sync response (200) or legacy job (202)
-    if (res.status === 202 || body.state === 'queued' || body.id?.startsWith?.('job_')) {
-      flash('Trabajo en cola…');
-      for (let i = 0; i < 60; i++) {
-        await new Promise(r => setTimeout(r, 400));
-        const jr = await fetch(`${store.baseUrl}/jobs/${encodeURIComponent(body.id)}`);
-        const j = await jr.json();
-        if (j.state === 'completed') {
-          const pose = j.result?.pose_local || j.result?.pose || j.result?.pose_world;
-          if (!pose) { flash('Sin propuesta.'); return; }
-          await applyFitPose(pose);
-          return;
-        }
-        if (j.state === 'failed') { flash(`Fallo: ${j.error?.message || j.error || '?'}`); return; }
-      }
-      flash('Tiempo agotado.');
-      return;
-    }
-    const pose = body.pose_local || body.pose;
-    if (!pose) { flash('Sin propuesta de pose.'); return; }
-    await applyFitPose(pose);
+    // Descendants must follow a resized parent.
+    await applyMatrioskaFitAll({ silent: true, rootId: node.id });
+    refreshAll();
+    flash('Posición aplicada.');
   } catch (err) {
     flash(`Fit fallido: ${err.message}`);
   }
-}
-
-async function applyFitPose(pose) {
-  await store.commitCommand('apply_fit_result', {
-    layer_id: store.selectedId,
-    pose,
-    base_revision: store.revision,
-  });
-  refreshAll();
-  flash('Posición aplicada.');
 }
 
 async function nestAndFit(childId, parentId) {
@@ -221,34 +233,23 @@ async function nestAndFit(childId, parentId) {
   try {
     const pose = await fitChildIntoParentPose(childId, parentId);
     if (!pose) throw new Error('sin pose');
-    await store.commitCommand('apply_fit_result', {
+    await store.commitCommand('set_pose', {
       layer_id: childId,
-      pose,
-      base_revision: store.revision,
+      pose: cleanPose(pose),
     });
-    if ($('matrioska-mode')) $('matrioska-mode').checked = true;
-    if ($('view-inverse')) $('view-inverse').checked = false;
-    store.matrioskaMode = true;
+    await applyMatrioskaFitAll({ silent: true, rootId: childId });
     refreshAll();
-    flash('Matrioska: encajado en la silueta padre.');
+    flash('Encajado en la silueta padre.');
   } catch (err) {
     flash(`Matrioska: ${err.message}`);
     refreshAll();
   }
 }
 
-/**
- * Optional clearance between child contour and parent contour (mm).
- * Global UI wins when the padding checkbox is on; else per-layer fit.padding_mm.
- */
-function matrioskaPaddingMm(layer = null) {
-  const enabled = !!$('matrioska-padding-enabled')?.checked;
-  if (enabled) {
-    const v = parseFloat($('matrioska-padding-mm')?.value);
-    return Number.isFinite(v) && v >= 0 ? v : 0;
-  }
-  const fromLayer = Number(layer?.fit?.padding_mm);
-  return Number.isFinite(fromLayer) && fromLayer >= 0 ? fromLayer : 0;
+/** Clearance between child contour and parent contour (mm) — global control. */
+export function matrioskaPaddingMm() {
+  const v = parseFloat($('matrioska-padding-mm')?.value);
+  return Number.isFinite(v) && v >= 0 ? v : 0;
 }
 
 /**
@@ -259,10 +260,10 @@ async function fitChildIntoParentPose(childId, _parentId) {
   const child = store.layerById(childId);
   if (!child?.parent_id) return null;
 
-  const wanted = matrioskaPaddingMm(child);
-  const attempts = [{ padding_mm: wanted, max_evaluations: 12000 }];
-  if (wanted > 0.5) attempts.push({ padding_mm: wanted * 0.5, max_evaluations: 14000 });
-  if (wanted > 0) attempts.push({ padding_mm: 0, max_evaluations: 18000 });
+  const wanted = matrioskaPaddingMm();
+  const attempts = [{ padding_mm: wanted }];
+  if (wanted > 0.5) attempts.push({ padding_mm: wanted * 0.5 });
+  if (wanted > 0) attempts.push({ padding_mm: 0 });
 
   let lastErr = 'no feasible';
   for (const opts of attempts) {
@@ -275,7 +276,7 @@ async function fitChildIntoParentPose(childId, _parentId) {
         mode: 'best',
         padding_mm: opts.padding_mm,
         angles_deg: [Number(child.pose?.angle_deg) || 0],
-        max_evaluations: opts.max_evaluations,
+        max_evaluations: 6000,
         seed: 42,
         request_seq: Date.now(),
       }),
@@ -284,8 +285,7 @@ async function fitChildIntoParentPose(childId, _parentId) {
     if (res.ok) {
       const pose = body.pose_local || body.pose;
       if (pose && Number.isFinite(pose.scale) && pose.scale > 0) {
-        pose._used_padding_mm = opts.padding_mm;
-        return pose;
+        return cleanPose(pose);
       }
       lastErr = 'respuesta sin pose';
     } else {
@@ -297,9 +297,14 @@ async function fitChildIntoParentPose(childId, _parentId) {
 
 function layerArea(layer) {
   const asset = store.assetById(layer.asset_id);
-  const lb = affine.measureLocalBounds(asset) || asset?.local_bounds;
+  const lb = affine.measureLocalBounds?.(asset) || asset?.local_bounds;
   if (!lb) return 0;
-  return Math.max(0, lb[2] - lb[0]) * Math.max(0, lb[3] - lb[1]);
+  const w = Math.max(0, lb[2] - lb[0]);
+  const h = Math.max(0, lb[3] - lb[1]);
+  // Intrinsic (unscaled) size: the biggest photo goes outermost.  The pose
+  // scale is ignored on purpose — every root is fitted to the canvas on
+  // import, which would make all footprints look alike.
+  return w * h;
 }
 
 function layerDepth(layerId) {
@@ -314,10 +319,21 @@ function layerDepth(layerId) {
   return d;
 }
 
+function isDescendantOf(layerId, ancestorId) {
+  let cur = store.layerById(layerId)?.parent_id;
+  const seen = new Set();
+  while (cur && !seen.has(cur)) {
+    if (cur === ancestorId) return true;
+    seen.add(cur);
+    cur = store.layerById(cur)?.parent_id;
+  }
+  return false;
+}
+
 /** Nested children in top-down order (parent before child). */
-function nestedLayersTopDown() {
-  return Object.values(store.doc?.layers || {})
-    .filter((l) => !l.locked && l.parent_id)
+function nestedLayersTopDown(rootId = null) {
+  return matrioskaLayers()
+    .filter((l) => l.parent_id && (!rootId || isDescendantOf(l.id, rootId)))
     .sort((a, b) => layerDepth(a.id) - layerDepth(b.id) || (a.order ?? 0) - (b.order ?? 0));
 }
 
@@ -329,9 +345,9 @@ async function remountMatrioskaChain(layers) {
   const ordered = [...layers].sort((a, b) => layerArea(b) - layerArea(a));
   if (ordered.length < 2) return ordered;
 
-  // Leaves → roots: clear parents without creating cycles mid-way.
   for (const layer of [...ordered].reverse()) {
-    if (layer.parent_id) {
+    const live = store.layerById(layer.id);
+    if (live?.parent_id) {
       await store.commitCommand('set_parent', {
         layer_id: layer.id,
         new_parent_id: null,
@@ -348,20 +364,20 @@ async function remountMatrioskaChain(layers) {
 }
 
 /** Fit canvas: max-scale every root into the usable sheet. */
-async function applyFitToCanvasAll() {
+async function applyFitToCanvasAll({ silent = false } = {}) {
   if (!store.doc?.canvas) return;
   const rect = affine.usableCanvasRect(store.doc.canvas);
   const roots = store.roots();
   let n = 0;
   for (const layer of roots) {
-    if (layer.locked) continue;
+    if (layer.locked || isMarcoLayer(layer)) continue;
     const asset = store.assetById(layer.asset_id);
     if (!asset?.local_bounds) continue;
     try {
       const pose = affine.fitPoseToRect(asset.local_bounds, rect, layer.pose?.angle_deg || 0);
       await store.commitCommand('apply_fit_result', {
         layer_id: layer.id,
-        pose,
+        pose: cleanPose(pose),
         base_revision: store.revision,
       });
       n += 1;
@@ -369,118 +385,155 @@ async function applyFitToCanvasAll() {
       console.warn('fit canvas failed', layer.id, err);
     }
   }
-  flash(n ? `Fit canvas: ${n} capa(s) ajustada(s).` : 'Fit canvas: nada que ajustar.');
+  if (!silent) flash(n ? `Fit lienzo: ${n} capa(s) ajustada(s).` : 'Fit lienzo: nada que ajustar.');
 }
 
 /**
  * Matrioska = fit every nested child into its parent contour, top-down.
+ * ``rootId`` limits the pass to the descendants of one layer.
  */
-async function applyMatrioskaFitAll() {
+async function applyMatrioskaFitAll({ silent = false, rootId = null } = {}) {
   if (!store.doc?.layers) return;
   let n = 0;
-  for (const layer of nestedLayersTopDown()) {
+  const errors = [];
+  for (const layer of nestedLayersTopDown(rootId)) {
     try {
       const pose = await fitChildIntoParentPose(layer.id, layer.parent_id);
       if (!pose) continue;
-      await store.commitCommand('apply_fit_result', {
+      await store.commitCommand('set_pose', {
         layer_id: layer.id,
-        pose,
-        base_revision: store.revision,
+        pose: cleanPose(pose),
       });
       n += 1;
+      viewport?.renderLayers?.();
     } catch (err) {
+      errors.push(`${layer.name || layer.id}: ${err.message}`);
       console.warn('matrioska fit failed', layer.id, err);
     }
   }
-  flash(n
-    ? `Matrioska: ${n} hijo(s) encajado(s) por contorno.`
-    : 'Matrioska: no hay hijos anidados. Pulsa Apilar o suelta una capa sobre otra.');
+  if (!silent) {
+    flash(n
+      ? `Matrioska: ${n} hijo(s) encajado(s) por contorno.`
+      : `Matrioska: no hay hijos anidados${errors[0] ? ` — ${errors[0]}` : ''}`);
+  }
 }
 
 /**
  * Nest all layers into a size chain (largest parent ← smaller …) and fit
- * each child into its parent contour top-down. Depth-2+ must be fitted
- * after the intermediate parent, or the grandchild stays parent-sized.
+ * each child into its parent contour top-down.
  */
 async function stackMatrioska() {
-  const layers = Object.values(store.doc?.layers || {}).filter((l) => !l.locked);
+  if (_matrioskaBusy) {
+    flash('Matrioska: ya se está apilando…');
+    return;
+  }
+  const layers = matrioskaLayers();
   if (layers.length < 2) {
-    flash('Matrioska: importa al menos 2 capas.');
+    await applyFitToCanvasAll({ silent: true });
+    refreshAll();
+    flash('Hacen falta al menos 2 siluetas para apilar (el marco no cuenta).');
     return;
   }
 
+  _matrioskaBusy = true;
   flash(`Apilando matrioska (${layers.length} capas)…`);
   try {
     await remountMatrioskaChain(layers);
+    // The outermost root fills the usable sheet first.
+    await applyFitToCanvasAll({ silent: true });
 
-    // Persist optional padding onto each nested child so inspector / drag match Apilar.
     const pad = matrioskaPaddingMm();
-    if ($('matrioska-padding-enabled')?.checked) {
-      for (const layer of nestedLayersTopDown()) {
-        const fit = { ...(layer.fit || {}), padding_mm: pad, target: 'parent_shape' };
-        try {
-          await store.commitCommand('set_layer_properties', {
-            layer_id: layer.id,
-            fit,
-          });
-        } catch (err) {
-          console.warn('padding persist', err);
-        }
+    for (const layer of nestedLayersTopDown()) {
+      const fit = { ...(layer.fit || {}), padding_mm: pad, target: 'parent_shape' };
+      try {
+        await store.commitCommand('set_layer_properties', { layer_id: layer.id, fit });
+      } catch (err) {
+        console.warn('padding persist', err);
       }
     }
 
     let n = 0;
     let lastScale = null;
     const errors = [];
-    // Top-down: fit mid into outer, then inner into mid, …
     for (const layer of nestedLayersTopDown()) {
       try {
-        const pose = await fitChildIntoParentPose(layer.id, layer.parent_id);
-        if (!pose) continue;
-        await store.commitCommand('apply_fit_result', {
+        const live = store.layerById(layer.id);
+        if (!live?.parent_id) {
+          errors.push(`${layer.name || layer.id}: sin padre tras remount`);
+          continue;
+        }
+        const pose = await fitChildIntoParentPose(layer.id, live.parent_id);
+        if (!pose) {
+          errors.push(`${layer.name || layer.id}: sin pose`);
+          continue;
+        }
+        await store.commitCommand('set_pose', {
           layer_id: layer.id,
-          pose,
-          base_revision: store.revision,
+          pose: cleanPose(pose),
         });
         n += 1;
         lastScale = pose.scale;
+        viewport?.renderLayers?.();
       } catch (err) {
         errors.push(`${layer.name || layer.id}: ${err.message}`);
+        console.warn('matrioska stack fit failed', layer.id, err);
       }
     }
 
-    if ($('matrioska-mode')) $('matrioska-mode').checked = true;
-    if ($('view-inverse')) $('view-inverse').checked = false;
-    store.matrioskaMode = true;
-    applyViewMode();
     refreshAll();
     if (n) {
-      flash(`Matrioska OK: cadena de ${n + 1} — último hijo escala ${lastScale?.toFixed?.(2) ?? '?'}.`);
+      flash(`Matrioska OK: ${n + 1} niveles — último hijo escala ${lastScale?.toFixed?.(2) ?? '?'}.`);
     } else {
       flash(`Matrioska: no cupo en el contorno${errors[0] ? ` — ${errors[0]}` : ''}.`);
     }
   } catch (err) {
     flash(`Matrioska: ${err.message}`);
     refreshAll();
+  } finally {
+    _matrioskaBusy = false;
   }
 }
 
-async function fitBest() { return runFit('best'); }
-async function fitAtPosition() { return runFit('at_position'); }
+// ---------------------------------------------------------------------------
+// Marco — siempre generado; sólo cambian las dimensiones
+// ---------------------------------------------------------------------------
 
-async function generateFrame() {
-  if (!store.doc) { flash('Abre o crea un documento primero.'); return; }
+function marcoParams() {
   const wallW = parseFloat($('marco-wall-w')?.value);
   const wallH = parseFloat($('marco-wall-h')?.value);
   const padding = parseFloat($('marco-padding')?.value);
-  if (!(wallW > 0) || !(wallH > 0)) {
-    flash('Ancho y altura de pared deben ser > 0 mm.');
-    return;
-  }
-  if (!(padding >= 0) || !Number.isFinite(padding)) {
-    flash('Padding del marco debe ser ≥ 0 mm.');
-    return;
-  }
+  return {
+    wallW: wallW > 0 ? wallW : 12,
+    wallH: wallH > 0 ? wallH : 12,
+    padding: padding >= 0 && Number.isFinite(padding) ? padding : 1,
+  };
+}
+
+function currentMarco() {
+  return Object.values(store.doc?.layers || {}).find(isMarcoLayer) || null;
+}
+
+/** Sync the marco inputs from the existing marco layer (open / restore). */
+function syncMarcoInputs() {
+  const m = currentMarco();
+  const ts = m ? (store.assetById(m.asset_id)?.trace_settings || {}) : null;
+  if (!ts) return;
+  if (Number(ts.wall_w_mm) > 0) $('marco-wall-w').value = ts.wall_w_mm;
+  if (Number(ts.wall_h_mm) > 0) $('marco-wall-h').value = ts.wall_h_mm;
+  if (Number(ts.padding_mm) >= 0) $('marco-padding').value = ts.padding_mm;
+}
+
+let _marcoBusy = false;
+/**
+ * Guarantee one marco layer sized to the current canvas + panel params.
+ * ``force`` regenerates even when one exists (canvas / params changed).
+ */
+async function ensureMarco({ force = false } = {}) {
+  if (!store.doc || _marcoBusy) return;
+  const existing = currentMarco();
+  if (existing && !force) { syncMarcoInputs(); return; }
+  const { wallW, wallH, padding } = marcoParams();
+  _marcoBusy = true;
   try {
     try {
       await store.commitCommand('generate_frame', {
@@ -489,45 +542,46 @@ async function generateFrame() {
         padding_mm: padding,
       });
     } catch (err) {
-      // Server without generate_frame yet → build via add_layers.
       if (!/UNKNOWN_COMMAND/i.test(err.message || '')) throw err;
       await generateFrameViaAddLayers(wallW, wallH, padding);
     }
-    refreshAll();
-    requestAnimationFrame(() => viewport.fitToCanvas());
-    flash(`Caja: ancho pared ${wallW} mm, altura ${wallH} mm, padding ${padding} mm.`);
   } catch (err) {
     flash(`Marco: ${err.message}`);
+  } finally {
+    _marcoBusy = false;
   }
 }
 
-/** Client-side caja (fondo + paredes) when server lacks `generate_frame`. */
+let _marcoTimer = null;
+function scheduleMarcoRegen() {
+  clearTimeout(_marcoTimer);
+  _marcoTimer = setTimeout(async () => {
+    await ensureMarco({ force: true });
+    refreshAll();
+    requestAnimationFrame(() => viewport.fitToCanvas());
+    const { wallW, wallH, padding } = marcoParams();
+    flash(`Marco: pared ${wallW} mm, altura ${wallH} mm, holgura ${padding} mm.`);
+  }, 250);
+}
+
+/** Client-side solid Marco tray when server lacks `generate_frame`. */
 async function generateFrameViaAddLayers(wallW, wallH, padding) {
   const c = store.doc.canvas;
   const W = Number(c.width_mm), H = Number(c.height_mm);
-  // Plan: wallW equal on all 4 sides. wallH = Z extrusion of paredes only.
   const innerW = W + 2 * padding, innerH = H + 2 * padding;
   const outerW = innerW + 2 * wallW, outerH = innerH + 2 * wallW;
-  const x0 = wallW, y0 = wallW, x1 = wallW + innerW, y1 = wallW + innerH;
-  const dFloor = `M0,0 H${outerW} V${outerH} H0 Z`;
-  const dWalls = `M0,0 H${outerW} V${outerH} H0 Z M${x0},${y0} H${x1} V${y1} H${x0} Z`;
-  const svgFloor = `<svg xmlns="http://www.w3.org/2000/svg" width="${outerW}mm" height="${outerH}mm" viewBox="0 0 ${outerW} ${outerH}"><path d="${dFloor}"/></svg>`;
-  const svgWalls = `<svg xmlns="http://www.w3.org/2000/svg" width="${outerW}mm" height="${outerH}mm" viewBox="0 0 ${outerW} ${outerH}"><path fill-rule="evenodd" d="${dWalls}"/></svg>`;
-  const shaFloor = await sha256Hex(svgFloor);
-  const shaWalls = await sha256Hex(svgWalls);
+  const floorH = Math.min(3, wallH * 0.45);
+  const dTray = `M0,0 H${outerW} V${outerH} H0 Z`;
+  const svgTray = `<svg xmlns="http://www.w3.org/2000/svg" width="${outerW}mm" height="${outerH}mm" viewBox="0 0 ${outerW} ${outerH}"><path d="${dTray}"/></svg>`;
+  const shaTray = await sha256Hex(svgTray);
   const uid = Date.now().toString(36);
-  const aidFloor = `asset_marco_fondo_${shaFloor.slice(0, 10)}`;
-  const aidWalls = `asset_marco_paredes_${shaWalls.slice(0, 10)}`;
-  const lidFloor = `layer_marco_fondo_${uid}`;
-  const lidWalls = `layer_marco_paredes_${uid}`;
+  const aid = `asset_marco_${shaTray.slice(0, 10)}`;
+  const lid = `layer_marco_${uid}`;
   const norm = { tx: -outerW / 2, ty: -outerH / 2, scale: 1, angle_deg: 0 };
   const lb = [-outerW / 2, -outerH / 2, outerW / 2, outerH / 2];
   const pose = { tx: W / 2, ty: H / 2, scale: 1, angle_deg: 0 };
 
-  const old = Object.values(store.doc.layers || {}).filter(
-    (n) => ['Marco', 'Marco fondo', 'Marco paredes'].includes(n.name)
-      || String(n.id || '').startsWith('layer_marco_'),
-  );
+  const old = Object.values(store.doc.layers || {}).filter(isMarcoLayer);
   for (const n of old) {
     await store.commitCommand('delete_subtree', {
       layer_id: n.id,
@@ -535,49 +589,54 @@ async function generateFrameViaAddLayers(wallW, wallH, padding) {
     });
   }
 
-  const mkAsset = (id, name, file, sha, svg) => ({
-    id,
-    name,
-    source_filename: file,
-    source_type: 'svg',
-    source_uri: `assets/${id}/source.svg`,
-    canonical_svg_uri: `assets/${id}/canonical.svg`,
-    source_sha256: sha,
-    source_viewbox: [0, 0, outerW, outerH],
-    mm_per_source_unit: 1,
-    normalization_pose: { ...norm },
-    geometry_hash: sha,
-    trace_settings: { kind: name === 'Marco fondo' ? 'procedural_frame_floor' : 'procedural_frame_walls' },
-    curve_tolerance_source: 0.02,
-    local_bounds: [...lb],
-    canonical_svg: svg,
-  });
-
   await store.commitCommand('add_layers', {
-    assets: [
-      mkAsset(aidFloor, 'Marco fondo', 'marco_fondo.svg', shaFloor, svgFloor),
-      mkAsset(aidWalls, 'Marco paredes', 'marco_paredes.svg', shaWalls, svgWalls),
-    ],
+    assets: [{
+      id: aid,
+      name: 'Marco',
+      source_filename: 'marco_tray.svg',
+      source_type: 'svg',
+      source_uri: `assets/${aid}/source.svg`,
+      canonical_svg_uri: `assets/${aid}/canonical.svg`,
+      source_sha256: shaTray,
+      source_viewbox: [0, 0, outerW, outerH],
+      mm_per_source_unit: 1,
+      normalization_pose: { ...norm },
+      geometry_hash: shaTray,
+      trace_settings: {
+        kind: 'procedural_frame_tray',
+        wall_w_mm: wallW,
+        wall_h_mm: wallH,
+        floor_h_mm: floorH,
+        padding_mm: padding,
+        inner_w: innerW,
+        inner_h: innerH,
+        outer_w: outerW,
+        outer_h: outerH,
+      },
+      curve_tolerance_source: 0.02,
+      local_bounds: [...lb],
+      canonical_svg: svgTray,
+    }],
     layers: [
-      { id: lidFloor, asset_id: aidFloor, name: 'Marco fondo', pose: { ...pose } },
-      { id: lidWalls, asset_id: aidWalls, name: 'Marco paredes', pose: { ...pose } },
+      { id: lid, asset_id: aid, name: 'Marco', pose: { ...pose } },
     ],
   });
 
   await store.commitCommand('set_layer_properties', {
-    layer_id: lidWalls,
+    layer_id: lid,
     extrusion_mm: wallH,
+    locked: true,
   });
 
   const allIds = Object.keys(store.doc.layers || {});
   const rest = allIds
-    .filter((id) => id !== lidFloor && id !== lidWalls)
+    .filter((id) => id !== lid)
     .sort((a, b) => (store.layerById(a)?.stack_rank ?? 0) - (store.layerById(b)?.stack_rank ?? 0));
-  await store.commitCommand('set_stack_order', { order: [lidFloor, lidWalls, ...rest] });
-  const rootRest = store.roots().map((r) => r.id).filter((id) => id !== lidFloor && id !== lidWalls);
+  await store.commitCommand('set_stack_order', { order: [lid, ...rest] });
+  const rootRest = store.roots().map((r) => r.id).filter((id) => id !== lid);
   await store.commitCommand('reorder_siblings', {
     parent_id: null,
-    order: [lidFloor, lidWalls, ...rootRest],
+    order: [lid, ...rootRest],
   });
 }
 
@@ -586,7 +645,6 @@ async function sha256Hex(text) {
     const buf = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(text));
     return [...new Uint8Array(buf)].map((b) => b.toString(16).padStart(2, '0')).join('');
   }
-  // Fallback: non-crypto hash sufficient for dedup id.
   let h = 2166136261;
   for (let i = 0; i < text.length; i++) {
     h ^= text.charCodeAt(i);
@@ -595,14 +653,20 @@ async function sha256Hex(text) {
   return `fb${(h >>> 0).toString(16).padStart(8, '0')}${'0'.repeat(54)}`;
 }
 
-let viewport, tree, inspector, interactions, exportDialog, viewer3d;
+// ---------------------------------------------------------------------------
+// UI glue
+// ---------------------------------------------------------------------------
+
+let viewport, tree, inspector, interactions, exportDialog, viewer3d, viewer3dInverse;
 
 function refreshAll() {
   enableToolbar(!!store.doc);
   try {
     syncCanvasInputs();
+    syncMarcoInputs();
     viewport.renderCanvas();
-    applyViewMode();
+    store.viewMode = 'shell';
+    viewport.renderLayers();
     viewport.applyViewport();
   } catch (err) {
     console.error('refreshAll view', err);
@@ -612,97 +676,29 @@ function refreshAll() {
     inspector.render(store.selectedId);
     exportDialog.updateCounter();
     viewer3d?.update();
+    viewer3dInverse?.update();
   } catch (err) {
     console.error('refreshAll ui', err);
   }
   window.dispatchEvent(new CustomEvent('editor:doc-changed'));
 }
 
-/** Resolve live canvas mode from the Vista checkboxes. */
-function currentViewMode() {
-  if ($('view-inverse')?.checked) return 'inverse';
-  if ($('matrioska-mode')?.checked) return 'shell';
-  return 'normal';
-}
-
-function setViewHint(mode) {
-  const el = $('view-mode-hint');
-  if (!el) return;
-  el.textContent = mode === 'inverse'
-    ? 'Modo: INVERSA (1 plancha por capa)'
-    : mode === 'shell'
-      ? 'Modo: MATRIOSKA (solo encaje 2D; 3D independiente)'
-      : 'Modo: normal';
-}
-
-/** Apply view instantly (client-side masks — no server round-trip). */
-function applyViewMode() {
-  if (!store.doc) {
-    store.viewMode = 'normal';
-    viewport.renderLayers();
-    setViewHint('normal');
-    return;
-  }
-  const mode = currentViewMode();
-  store.viewMode = mode;
-  viewport.renderLayers();
-  setViewHint(mode);
-  viewer3d?.update?.();
-  if (mode === 'inverse') flash('Vista inversa aplicada.');
-  else if (mode === 'shell') flash('Vista matrioska aplicada.');
-}
-
-/** Wire Vista panel checkboxes (Matrioska / Inversa / Fit canvas). */
-function bindViewToggles() {
-  const matrioska = $('matrioska-mode');
-  const inverse = $('view-inverse');
-  const fitCanvas = $('fit-to-canvas');
-
-  matrioska?.addEventListener('change', async () => {
-    matrioska.dataset.userTouched = '1';
-    store.matrioskaMode = !!matrioska.checked;
-    if (matrioska.checked) {
-      if (inverse) inverse.checked = false;
-      applyViewMode();
-      const layers = Object.values(store.doc?.layers || {});
-      if (layers.filter((l) => !l.locked).length >= 2) {
-        await stackMatrioska();
-      } else {
-        flash('Matrioska: importa al menos 2 capas.');
-        refreshAll();
-      }
-      return;
-    }
-    applyViewMode();
-  });
-
-  fitCanvas?.addEventListener('change', async () => {
-    store.fitToCanvas = !!fitCanvas.checked;
-    if (fitCanvas.checked) {
-      await applyFitToCanvasAll();
-      refreshAll();
-      return;
-    }
-    applyViewMode();
-  });
-
-  inverse?.addEventListener('change', () => {
-    if (inverse.checked) {
-      if (matrioska) matrioska.checked = false;
-      store.matrioskaMode = false;
-    }
-    applyViewMode();
-  });
-
-  store.fitToCanvas = !!fitCanvas?.checked;
-  store.matrioskaMode = !!matrioska?.checked;
+function updateViewers() {
+  viewer3d?.update();
+  viewer3dInverse?.update();
 }
 
 async function boot() {
+  // Always-on behaviours: children clamp+max-fit inside their parent contour,
+  // roots clamp to the usable sheet.  No modes.
+  store.fitToCanvas = true;
+  store.matrioskaMode = true;
+  store.viewMode = 'shell';
+
   const svg = $('editor-svg');
   viewport = new Viewport2D(svg);
   tree = new LayerTree($('layer-tree'), viewport, {
-    matrioska: () => !!$('matrioska-mode')?.checked,
+    matrioska: () => true,
     onNest: (childId, parentId) => nestAndFit(childId, parentId),
   });
   inspector = new Inspector($('inspector'), viewport);
@@ -711,18 +707,26 @@ async function boot() {
     recipeSelect: $('recipe-select'),
     exportSelected: $('export-selected'),
     exportBatch: $('export-batch'),
-    fitStatus: $('fit-status'),
+    fitStatus: $('export-status'),
+    formats: () => {
+      const f = ['stl'];
+      if ($('export-fmt-svg')?.checked) f.push('svg');
+      if ($('export-fmt-png')?.checked) f.push('png');
+      return f;
+    },
   });
-  viewer3d = mountViewer3D($('viewer-3d'));
+  viewer3d = mountViewer3D($('viewer-3d'), { mode: 'normal' });
+  viewer3dInverse = mountViewer3D($('viewer-3d-inverse'), { mode: 'inverse' });
 
   // Toolbar
   $('editor-new').addEventListener('click', async () => {
     try {
       await store.createDocument('Nuevo documento');
       enableToolbar(true);
+      await ensureMarco();
       refreshAll();
       requestAnimationFrame(() => viewport.fitToCanvas());
-      flash('Documento creado.');
+      flash('Documento creado. Arrastra tus fotos.');
     } catch (err) { flash(err.message); }
   });
   $('editor-save').addEventListener('click', saveProject);
@@ -735,86 +739,67 @@ async function boot() {
   });
   $('import-files').addEventListener('change', (e) => importFiles(e.target));
 
-  // Drag-and-drop import: drop PNG/SVG anywhere on the editor (spec §3.2).
+  // Drag-and-drop import anywhere on the editor.
   const dropTarget = document.querySelector('.editor-main') || document.body;
-  let dragDepth = 0;
+  const clearDropActive = () => { dropTarget.classList.remove('drop-active'); };
   dropTarget.addEventListener('dragenter', (e) => {
     if (!store.doc) return;
+    const types = [...(e.dataTransfer?.types || [])];
+    if (!types.includes('Files')) return;
     e.preventDefault();
-    dragDepth += 1;
     dropTarget.classList.add('drop-active');
   });
   dropTarget.addEventListener('dragover', (e) => {
     if (!store.doc) return;
+    const types = [...(e.dataTransfer?.types || [])];
+    if (!types.includes('Files')) return;
     e.preventDefault();
     e.dataTransfer.dropEffect = 'copy';
   });
   dropTarget.addEventListener('dragleave', (e) => {
-    e.preventDefault();
-    dragDepth = Math.max(0, dragDepth - 1);
-    if (dragDepth === 0) dropTarget.classList.remove('drop-active');
+    if (e.target === dropTarget || !dropTarget.contains(e.relatedTarget)) clearDropActive();
   });
   dropTarget.addEventListener('drop', async (e) => {
     e.preventDefault();
-    dragDepth = 0;
-    dropTarget.classList.remove('drop-active');
+    clearDropActive();
     if (!store.doc) return;
     const files = [...(e.dataTransfer?.files || [])].filter((f) =>
       /\.(png|svg)$/i.test(f.name) || f.type === 'image/png' || f.type === 'image/svg+xml');
     if (!files.length) { flash('Suelta archivos PNG o SVG.'); return; }
-    const fd = new FormData();
-    for (const f of files) fd.append('files[]', f, f.name);
-    fd.append('base_revision', String(store.revision));
-    flash(`Importando ${files.length} archivo(s)…`);
-    try {
-      const res = await fetch(`${store.baseUrl}/documents/${encodeURIComponent(store.doc.id)}/assets`, {
-        method: 'POST',
-        body: fd,
-      });
-      if (!res.ok) {
-        const body = await res.json().catch(() => ({}));
-        throw new Error(body?.error?.message || `HTTP ${res.status}`);
-      }
-      const out = await res.json();
-      store._applyDocumentPayload(out);
-      if (!Object.keys(store.doc?.layers || {}).length && store.doc?.id) {
-        await store.loadDocument(store.doc.id);
-      }
-      refreshAll();
-      viewport.applyViewport();
-      viewport.fitToCanvas();
-      const n = Object.keys(store.doc?.layers || {}).length;
-      flash(n ? `Importados ${out.imported ?? n} asset(s).` : 'Importó assets pero no hay capas.');
-    } catch (err) {
-      flash(`Importación fallida: ${err.message}`);
-    }
+    await importFileList(files);
   });
-  $('fit-best').addEventListener('click', fitBest);
-  $('fit-at-position').addEventListener('click', fitAtPosition);
+  window.addEventListener('dragend', clearDropActive);
+  window.addEventListener('drop', clearDropActive);
+  clearDropActive();
+
+  $('fit-best').addEventListener('click', runFit);
   $('matrioska-stack')?.addEventListener('click', stackMatrioska);
-  $('marco-generate')?.addEventListener('click', generateFrame);
-  for (const id of ['canvas-width-mm', 'canvas-height-mm', 'canvas-padding-top',
-                    'canvas-padding-right', 'canvas-padding-bottom', 'canvas-padding-left']) {
-    $(id).addEventListener('change', applyCanvas);
+  for (const id of CANVAS_IDS) $(id).addEventListener('change', applyCanvas);
+  for (const id of ['marco-wall-w', 'marco-wall-h', 'marco-padding']) {
+    $(id)?.addEventListener('change', scheduleMarcoRegen);
   }
-  $('recipe-select')?.addEventListener('change', () => {
-    const v = $('recipe-select').value;
-    // Selecting "Inversa" in export auto-applies the live inverse view.
-    if (v === 'inverse_registered') {
-      if ($('view-inverse')) $('view-inverse').checked = true;
-    }
-    exportDialog.updateCounter();
-    applyViewMode();
+  $('matrioska-padding-mm')?.addEventListener('change', async () => {
+    if (!store.doc) return;
+    await applyMatrioskaFitAll({ silent: true });
+    refreshAll();
+    flash(`Holgura ${matrioskaPaddingMm()} mm aplicada.`);
   });
-  bindViewToggles();
+  window.addEventListener('editor:refit-descendants', async (e) => {
+    const lid = e.detail?.layerId;
+    if (!lid || !store.doc) return;
+    await applyMatrioskaFitAll({ silent: true, rootId: lid });
+    refreshAll();
+  });
+  $('recipe-select')?.addEventListener('change', () => exportDialog.updateCounter());
+  for (const id of ['export-fmt-svg', 'export-fmt-png']) {
+    $(id)?.addEventListener('change', () => exportDialog.updateCounter());
+  }
 
   const doUndo = () => store.undo().then(() => refreshAll()).catch((err) => flash(err.message));
   const doRedo = () => store.redo().then(() => refreshAll()).catch((err) => flash(err.message));
   $('editor-undo')?.addEventListener('click', doUndo);
   $('editor-redo')?.addEventListener('click', doRedo);
 
-  // Undo / redo (spec §13.4): Ctrl+Z / Ctrl+Y (or Ctrl+Shift+Z).
-  // Never intercept while the user is editing a text field.
   window.addEventListener('keydown', (e) => {
     const key0 = e.key.toLowerCase();
     if (!(e.ctrlKey || e.metaKey) || (key0 !== 'z' && key0 !== 'y')) return;
@@ -829,7 +814,6 @@ async function boot() {
     }
   });
 
-  // Delete selected layer
   window.addEventListener('keydown', (e) => {
     if (e.key !== 'Delete' && e.key !== 'Backspace') return;
     const t = e.target;
@@ -839,17 +823,7 @@ async function boot() {
     tree._delete(store.selectedId);
   });
 
-  $('auto-scale-drag')?.addEventListener('change', async (e) => {
-    if (!store.selectedId) return;
-    const node = store.layerById(store.selectedId);
-    if (!node) return;
-    try {
-      await store.commitCommand('set_layer_properties', {
-        layer_id: store.selectedId,
-        fit: { ...node.fit, auto_scale_while_dragging: !!e.target.checked },
-      });
-    } catch (err) { flash(err.message); }
-  });
+  // Resizable side panels
   const main = document.querySelector('.editor-main');
   const persist = (key, val) => { try { localStorage.setItem(key, String(val)); } catch { /* ignore */ } };
   const restore = (key, fallback) => {
@@ -857,8 +831,8 @@ async function boot() {
     try { v = parseFloat(localStorage.getItem(key)); } catch { /* ignore */ }
     return Number.isFinite(v) && v >= 160 ? v : fallback;
   };
-  let leftW = restore('editor.panelLeft', 300);
-  let rightW = restore('editor.panelRight', 340);
+  let leftW = restore('editor.panelLeft', 320);
+  let rightW = restore('editor.panelRight', 360);
   main.style.setProperty('--panel-left', `${leftW}px`);
   main.style.setProperty('--panel-right', `${rightW}px`);
 
@@ -881,11 +855,11 @@ async function boot() {
         handle.removeEventListener('pointerup', onUp);
         handle.removeEventListener('pointercancel', onUp);
         persist(side === 'left' ? 'editor.panelLeft' : 'editor.panelRight', side === 'left' ? leftW : rightW);
-        // Refit canvas / 3D after column width change
         requestAnimationFrame(() => {
           viewport.fitToCanvas();
           viewer3d?.resize?.();
-          viewer3d?.update?.();
+          viewer3dInverse?.resize?.();
+          updateViewers();
         });
       };
       handle.addEventListener('pointermove', onMove);
@@ -900,24 +874,27 @@ async function boot() {
   svg.addEventListener('click', (e) => {
     const layerEl = e.target.closest?.('.layer');
     if (layerEl) {
-      store.select(layerEl.dataset.layerId);
+      const lid = layerEl.dataset.layerId;
+      const node = store.layerById(lid);
+      if (node && viewport._isFrameLayer(node)) return;
+      store.select(lid);
       tree.render();
       inspector.render(store.selectedId);
       viewport.renderSelection();
-      viewer3d?.update();
+      updateViewers();
       return;
     }
-    // Click on empty canvas space clears selection
     if (!e.target.closest?.('[data-handle]')) {
       store.clearSelection();
       tree.render();
       inspector.render(null);
       viewport.renderSelection();
-      viewer3d?.update();
+      updateViewers();
     }
   });
 
-  // Try to restore the most recent document (reopen after close)
+  // Restore the most recent document, else create one so the user can drop
+  // photos straight away.
   try {
     const res = await fetch(`${store.baseUrl}/documents`);
     if (res.ok) {
@@ -926,6 +903,7 @@ async function boot() {
       if (docs.length) {
         await store.loadDocument(docs[docs.length - 1].id);
         enableToolbar(true);
+        await ensureMarco();
         refreshAll();
         requestAnimationFrame(() => viewport.fitToCanvas());
         flash(`Documento restaurado: ${store.doc.name}`);
@@ -933,8 +911,17 @@ async function boot() {
       }
     }
   } catch { /* no documents yet */ }
-  enableToolbar(false);
-  flash('Crea un documento nuevo o abre un proyecto.');
+  try {
+    await store.createDocument('Nuevo documento');
+    enableToolbar(true);
+    await ensureMarco();
+    refreshAll();
+    requestAnimationFrame(() => viewport.fitToCanvas());
+    flash('Arrastra tus fotos para empezar.');
+  } catch {
+    enableToolbar(false);
+    flash('Crea un documento nuevo o abre un proyecto.');
+  }
 }
 
 boot();

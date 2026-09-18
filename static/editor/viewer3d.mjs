@@ -27,7 +27,8 @@ function _layerWorldMatrix(layerId, asset) {
     seen.add(cur);
     const node = store.layerById(cur);
     if (!node) break;
-    chain.unshift(layerAffineMatrix(node));
+    // flip_h mirrors only the layer itself; ancestors contribute pose only.
+    chain.unshift(cur === layerId ? layerAffineMatrix(node) : affineMatrix(node.pose));
     cur = node.parent_id;
   }
   let m = [1, 0, 0, 1, 0, 0];
@@ -81,6 +82,7 @@ function _stackZNormal(layerId) {
 function _isFrameFloor(node) {
   if (!_isFrameLayer(node)) return false;
   const name = node.name || '';
+  // Single solid Marco tray counts as floor for content stacking.
   return name.includes('fondo') || name === 'Marco';
 }
 
@@ -89,26 +91,38 @@ function _isFrameWalls(node) {
   return (node.name || '').includes('paredes');
 }
 
-/** Top of the box floor — content and walls sit here; taller walls do NOT push content. */
+/** Floor thickness for content Z — tray uses floor_h, not full wall height. */
+function _frameFloorThickness(node) {
+  const extr = _extrusionOf(node);
+  if ((node.name || '') === 'Marco') {
+    const asset = store.doc?.assets?.[node.asset_id];
+    const fh = Number(asset?.trace_settings?.floor_h_mm);
+    if (Number.isFinite(fh) && fh > 0) return Math.min(fh, extr);
+    return Math.min(3, extr * 0.45);
+  }
+  return extr;
+}
+
+/** Top of the box floor — content sits here; taller walls do NOT push content. */
 function _fondoTop() {
   const gap = store.doc?.stack_gap_mm ?? 0.4;
   let h = 0;
   for (const l of Object.values(store.doc?.layers || {})) {
     if (!_effectiveVisible(l) || !_isFrameFloor(l)) continue;
-    h = Math.max(h, _extrusionOf(l));
+    h = Math.max(h, _frameFloorThickness(l));
   }
   return h > 0 ? h + gap : 0;
 }
 
 /**
- * Marco fondo at z=0; paredes on the floor (grow in +Z without moving silhouettes).
+ * Marco (solid tray) at z=0; legacy paredes on the floor.
  * Content stacks on the floor, ignoring wall height.
  */
 function _stackZFrame(layerId) {
   const node = store.layerById(layerId);
   if (!node) return 0;
   if (_isFrameWalls(node)) return _fondoTop();
-  return 0; // fondo (and legacy single Marco)
+  return 0; // fondo / solid Marco tray
 }
 
 /** Content / silhouette stack starting on top of the floor only. */
@@ -141,14 +155,14 @@ function _stackZContent(layerId) {
  * Normal: parent below, children above (on the box floor).
  * Inverse: flip content only — Marco always stays at the bottom; wall height ignored for content Z.
  */
-function _stackZ(layerId) {
+function _stackZ(layerId, mode = 'normal') {
   const node = store.layerById(layerId);
   if (!node) return 0;
 
   if (_isFrameLayer(node)) return _stackZFrame(layerId);
 
   const normalZ = _stackZContent(layerId);
-  if ((store.viewMode || 'normal') !== 'inverse') return normalZ;
+  if (mode !== 'inverse') return normalZ;
 
   const base = _fondoTop();
   let maxRelTop = 0;
@@ -171,7 +185,13 @@ function _allLayerIds() {
   return Object.keys(store.doc?.layers || {});
 }
 
-export function mountViewer3D(container) {
+/**
+ * @param {HTMLElement} container
+ * @param {{ mode?: 'normal'|'inverse' }} [opts]  Fixed view: the editor mounts
+ *   one viewer per mode so both assemblies are always visible.
+ */
+export function mountViewer3D(container, { mode = 'normal' } = {}) {
+  const viewMode = mode === 'inverse' ? 'inverse' : 'normal';
   if (typeof THREE === 'undefined') {
     container.innerHTML = '<p class="empty-state">Three.js no disponible.</p>';
     return { update: () => {}, dispose: () => {} };
@@ -289,7 +309,7 @@ export function mountViewer3D(container) {
     const H = c ? c.height_mm : 200;
     let maxZ = 3;
     for (const l of Object.values(store.doc?.layers || {})) {
-      if (_effectiveVisible(l)) maxZ = Math.max(maxZ, _stackZ(l.id) + _extrusionOf(l));
+      if (_effectiveVisible(l)) maxZ = Math.max(maxZ, _stackZ(l.id, viewMode) + _extrusionOf(l));
     }
     const cx = W / 2;
     const cy = H / 2;
@@ -596,6 +616,12 @@ export function mountViewer3D(container) {
     const asset = store.assetById(node.asset_id);
     if (!asset?.canonical_svg) return null;
 
+    const ts = asset.trace_settings || {};
+    if (ts.kind === 'procedural_frame_tray' || (node.name || '') === 'Marco') {
+      const tray = buildTrayMesh(layerId, asset, node);
+      if (tray) return tray;
+    }
+
     const paths = _svgPaths(asset);
     if (!paths.length) return null;
 
@@ -605,7 +631,7 @@ export function mountViewer3D(container) {
     const m = _layerWorldMatrix(layerId, asset);
     const canvasH = store.doc?.canvas?.height_mm ?? 200;
     const t = _extrusionOf(node);
-    const z0 = _stackZ(layerId);
+    const z0 = _stackZ(layerId, viewMode);
 
     let geo;
     try {
@@ -636,6 +662,112 @@ export function mountViewer3D(container) {
     }));
     mesh.name = layerId;
     return mesh;
+  }
+
+  /** Solid open-top tray as one manifold mesh (no floor∥wall internal faces).
+   * Geometry is built in SVG source units (0..ow, 0..oh) so the same
+   * pathToLocalMatrix + pose chain as other layers centers it correctly.
+   */
+  function buildTrayMesh(layerId, asset, node) {
+    const ts = asset.trace_settings || {};
+    const wallW = Number(ts.wall_w_mm);
+    const wallH = _extrusionOf(node);
+    let floorH = Number(ts.floor_h_mm);
+    if (!(floorH > 0) || floorH >= wallH) floorH = Math.min(3, wallH * 0.45);
+    if (!(wallW > 0) || !(wallH > floorH)) return null;
+
+    const ow = Number(ts.outer_w) || Number(asset.source_viewbox?.[2]);
+    const oh = Number(ts.outer_h) || Number(asset.source_viewbox?.[3]);
+    if (!(ow > 2 * wallW) || !(oh > 2 * wallW)) return null;
+
+    const geo = _openRectTrayGeometry(0, 0, ow, oh, wallW, wallH, floorH);
+    if (!geo) return null;
+
+    const m = _layerWorldMatrix(layerId, asset);
+    const canvasH = store.doc?.canvas?.height_mm ?? 200;
+    const z0 = _stackZ(layerId, viewMode);
+    const [a, b, c, d, e, f] = m;
+    const mat = new THREE.Matrix4().set(
+      a, c, 0, e,
+      -b, -d, 0, canvasH - f,
+      0, 0, 1, z0,
+      0, 0, 0, 1,
+    );
+    geo.applyMatrix4(mat);
+    // Manufacturing Y-flip makes det(mat) < 0 and reverses winding — fix for FrontSide.
+    const index = geo.getIndex();
+    if (index) {
+      const arr = index.array;
+      for (let i = 0; i < arr.length; i += 3) {
+        const t = arr[i + 1];
+        arr[i + 1] = arr[i + 2];
+        arr[i + 2] = t;
+      }
+      index.needsUpdate = true;
+    }
+    geo.computeVertexNormals();
+
+    // Flat shading: the tray is a box — hard edges, no smoothed corners.
+    const mesh = new THREE.Mesh(geo, new THREE.MeshStandardMaterial({
+      color: 0x9aa3b2, roughness: 0.8, metalness: 0.05, side: THREE.FrontSide,
+      flatShading: true,
+    }));
+    mesh.name = layerId;
+    return mesh;
+  }
+
+  /** Manifold open-top rectangular tray: exterior faces only. */
+  function _openRectTrayGeometry(x0, y0, x1, y1, wallW, wallH, floorH) {
+    const ix0 = x0 + wallW, iy0 = y0 + wallW;
+    const ix1 = x1 - wallW, iy1 = y1 - wallW;
+    if (!(ix1 > ix0) || !(iy1 > iy0) || !(floorH > 0) || !(wallH > floorH)) return null;
+
+    const pos = [];
+    const idx = [];
+    const push = (x, y, z) => {
+      pos.push(x, y, z);
+      return (pos.length / 3) - 1;
+    };
+    const quad = (a, b, c, d) => {
+      idx.push(a, b, c, a, c, d);
+    };
+    const ring = (xa, ya, xb, yb, z) => [
+      push(xa, ya, z),
+      push(xb, ya, z),
+      push(xb, yb, z),
+      push(xa, yb, z),
+    ];
+
+    const ob = ring(x0, y0, x1, y1, 0);
+    const ot = ring(x0, y0, x1, y1, wallH);
+    const iff = ring(ix0, iy0, ix1, iy1, floorH);
+    const it = ring(ix0, iy0, ix1, iy1, wallH);
+
+    // Bottom (-Z)
+    quad(ob[0], ob[3], ob[2], ob[1]);
+    // Cavity floor (+Z)
+    quad(iff[0], iff[1], iff[2], iff[3]);
+    // Rim top
+    for (let i = 0; i < 4; i++) {
+      const j = (i + 1) % 4;
+      quad(ot[i], ot[j], it[j], it[i]);
+    }
+    // Outer walls
+    for (let i = 0; i < 4; i++) {
+      const j = (i + 1) % 4;
+      quad(ob[i], ob[j], ot[j], ot[i]);
+    }
+    // Inner walls (normals into cavity)
+    for (let i = 0; i < 4; i++) {
+      const j = (i + 1) % 4;
+      quad(iff[j], iff[i], it[i], it[j]);
+    }
+
+    const geo = new THREE.BufferGeometry();
+    geo.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
+    geo.setIndex(idx);
+    geo.computeVertexNormals();
+    return geo;
   }
 
   /** One plate = canvas − THIS layer only (children are separate plates). */
@@ -669,7 +801,7 @@ export function mountViewer3D(container) {
 
     try {
       const t = _extrusionOf(node);
-      const z0 = _stackZ(layerId);
+      const z0 = _stackZ(layerId, viewMode);
       return _meshFromDocShapes([plate, ...islands], t, z0, _layerColor(layerId), `inv-${layerId}`);
     } catch (err) {
       console.warn('inverse mesh failed', layerId, err);
@@ -726,7 +858,7 @@ export function mountViewer3D(container) {
     for (const h of holeShapes) outer.holes.push(h);
     const shapes = [outer, ...parentShapes.slice(1)];
     const t = _extrusionOf(node);
-    const z0 = _stackZ(layerId);
+    const z0 = _stackZ(layerId, viewMode);
     return _meshFromDocShapes(shapes, t, z0, _layerColor(layerId), `shell-${layerId}`);
   }
 
@@ -750,7 +882,7 @@ export function mountViewer3D(container) {
       );
       const body = await res.json().catch(() => ({}));
       if (!res.ok) throw new Error(body?.error?.message || `HTTP ${res.status}`);
-      if (seq !== _inverseSeq || store.revision !== rev || store.viewMode !== 'inverse') return;
+      if (seq !== _inverseSeq || store.revision !== rev) return;
 
       while (assembly.children.length) {
         const ch = assembly.children[0];
@@ -774,7 +906,7 @@ export function mountViewer3D(container) {
         const node = store.layerById(layerId);
         if (!node || !_effectiveVisible(node)) continue;
         const t = entry.extrusion_mm ?? _extrusionOf(node);
-        const z0 = _stackZ(layerId);
+        const z0 = _stackZ(layerId, viewMode);
         const mesh = _meshFromRings(entry.rings, t, z0, _layerColor(layerId), `inv-${layerId}`);
         if (mesh) {
           if (layerId === store.selectedId) {
@@ -789,7 +921,7 @@ export function mountViewer3D(container) {
       console.warn('inverse mesh-rings failed, client fallback', err);
       // Always rebuild client inverse for THIS request's targets, even if a
       // newer request started — otherwise a 404 + race leaves the assembly empty.
-      if (store.viewMode !== 'inverse' || store.revision !== rev) return;
+      if (store.revision !== rev) return;
       while (assembly.children.length) {
         const ch = assembly.children[0];
         assembly.remove(ch);
@@ -816,13 +948,21 @@ export function mountViewer3D(container) {
     while (assembly.children.length) {
       const ch = assembly.children[0];
       assembly.remove(ch);
-      ch.geometry?.dispose?.();
-      ch.material?.dispose?.();
+      if (ch.traverse) {
+        ch.traverse((o) => {
+          o.geometry?.dispose?.();
+          if (Array.isArray(o.material)) o.material.forEach((m) => m.dispose?.());
+          else o.material?.dispose?.();
+        });
+      } else {
+        ch.geometry?.dispose?.();
+        ch.material?.dispose?.();
+      }
     }
     syncSheetAndGrid();
     if (!store.doc) { frameStable(); return; }
 
-    const mode = store.viewMode || 'normal';
+    const mode = viewMode;
     const targets = _allLayerIds();
 
     if (mode === 'inverse') {
@@ -849,8 +989,13 @@ export function mountViewer3D(container) {
       const mesh = buildLayerMesh(layerId);
       if (!mesh) continue;
       if (layerId === store.selectedId) {
-        mesh.material.emissive = new THREE.Color(0x1d4ed8);
-        mesh.material.emissiveIntensity = 0.25;
+        const paint = (mat) => {
+          if (!mat) return;
+          mat.emissive = new THREE.Color(0x1d4ed8);
+          mat.emissiveIntensity = 0.25;
+        };
+        if (mesh.isGroup) mesh.traverse((o) => paint(o.material));
+        else paint(mesh.material);
       }
       assembly.add(mesh);
     }

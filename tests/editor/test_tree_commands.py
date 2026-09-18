@@ -211,3 +211,18 @@ class TestApplyFitResult:
         })
         assert doc["layers"]["A"]["pose"]["tx"] == 11
         assert doc["layers"]["A"]["pose"]["scale"] == 1.5
+
+    def test_pose_metadata_keys_ignored(self):
+        """Client may attach metadata; only the four pose fields are stored."""
+        doc = make_doc()
+        cmd_apply_fit_result(doc, {
+            "layer_id": "A",
+            "pose": {
+                "tx": 3, "ty": 4, "scale": 2, "angle_deg": 0,
+                "_used_padding_mm": 1.5,
+            },
+            "base_revision": 7,
+        })
+        assert doc["layers"]["A"]["pose"] == {
+            "tx": 3, "ty": 4, "scale": 2, "angle_deg": 0,
+        }

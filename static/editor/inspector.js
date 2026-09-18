@@ -60,6 +60,9 @@ export class Inspector {
     };
 
     h('Transformación');
+    const isFrame = this.viewport._isFrameLayer?.(node)
+      || (node.name || '') === 'Marco'
+      || String(node.id || '').startsWith('layer_marco_');
     const tx = num(pose.tx);
     const ty = num(pose.ty);
     const scale = num(pose.scale, 0.01, 0.0001);
@@ -70,6 +73,10 @@ export class Inspector {
     row('Ángulo (°)', angle);
 
     const applyPose = async () => {
+      if (isFrame) {
+        this._flash('El marco solo se edita desde su panel.');
+        return;
+      }
       const p = {
         tx: parseFloat(tx.value),
         ty: parseFloat(ty.value),
@@ -88,7 +95,10 @@ export class Inspector {
         this._flash(err.message);
       }
     };
-    for (const i of [tx, ty, scale, angle]) i.addEventListener('change', applyPose);
+    for (const i of [tx, ty, scale, angle]) {
+      if (isFrame) i.disabled = true;
+      else i.addEventListener('change', applyPose);
+    }
 
     // Width/height: uniform scale derived from the local bounds (task 09)
     h('Tamaño (mm, escala uniforme)');
@@ -97,6 +107,10 @@ export class Inspector {
     row('Ancho', width);
     row('Alto', height);
     const applySize = async () => {
+      if (isFrame) {
+        this._flash('El marco solo se edita desde su panel.');
+        return;
+      }
       const w = parseFloat(width.value), hgt = parseFloat(height.value);
       if (!(w > 0) || !(hgt > 0)) { this._flash('Tamaño debe ser positivo.'); return; }
       // Uniform scale from displayed width: width = localW * scale.
@@ -112,8 +126,13 @@ export class Inspector {
         this._flash(err.message);
       }
     };
-    width.addEventListener('change', applySize);
-    height.addEventListener('change', applySize);
+    if (isFrame) {
+      width.disabled = true;
+      height.disabled = true;
+    } else {
+      width.addEventListener('change', applySize);
+      height.addEventListener('change', applySize);
+    }
 
     h('Propiedades');
     const name = document.createElement('input');
@@ -140,8 +159,10 @@ export class Inspector {
 
     const locked = document.createElement('input');
     locked.type = 'checkbox';
-    locked.checked = !!node.locked;
+    locked.checked = !!node.locked || isFrame;
+    if (isFrame) locked.disabled = true;
     locked.addEventListener('change', async () => {
+      if (isFrame) return;
       try {
         await store.commitCommand('set_layer_properties', { layer_id: layerId, locked: locked.checked });
         this.render(layerId);
@@ -149,20 +170,24 @@ export class Inspector {
     });
     const lockRow = document.createElement('label');
     lockRow.className = 'insp-row checkbox-row';
-    lockRow.textContent = 'Bloqueada ';
+    lockRow.textContent = isFrame ? 'Bloqueada (marco) ' : 'Bloqueada ';
     lockRow.appendChild(locked);
     this.el.appendChild(lockRow);
 
     const flipH = document.createElement('input');
     flipH.type = 'checkbox';
     flipH.checked = !!node.flip_h;
+    if (isFrame) flipH.disabled = true;
     flipH.addEventListener('change', async () => {
+      if (isFrame) return;
       try {
         await store.commitCommand('set_layer_properties', { layer_id: layerId, flip_h: flipH.checked });
         this.viewport.renderLayers();
         this.viewport.renderSelection();
         this.render(layerId);
         window.dispatchEvent(new CustomEvent('editor:doc-changed'));
+        // The mirrored contour is a new container for its children: re-fit them.
+        window.dispatchEvent(new CustomEvent('editor:refit-descendants', { detail: { layerId } }));
       } catch (err) { this._flash(err.message); }
     });
     const flipRow = document.createElement('label');

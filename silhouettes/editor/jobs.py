@@ -198,6 +198,14 @@ def _worker_export(payload: Dict[str, Any]) -> Dict[str, Any]:
                 geometry=geom,
                 pose=Pose.from_dict(pose_d),
                 extrusion_mm=float(row["extrusion_mm"]),
+                tray_wall_w_mm=(
+                    float(row["tray_wall_w_mm"])
+                    if row.get("tray_wall_w_mm") is not None else None
+                ),
+                tray_floor_h_mm=(
+                    float(row["tray_floor_h_mm"])
+                    if row.get("tray_floor_h_mm") is not None else None
+                ),
             ))
         if not plan_items:
             return {
