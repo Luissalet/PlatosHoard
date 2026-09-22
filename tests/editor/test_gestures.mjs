@@ -37,11 +37,13 @@ const identityCTM = {
 };
 dom.window.SVGElement.prototype.getScreenCTM = function () { return identityCTM; };
 dom.window.SVGElement.prototype.setPointerCapture = function () {};
+dom.window.SVGElement.prototype.releasePointerCapture = function () {};
 
 const affine = await import('../../static/editor/affine.mjs');
 const { store } = await import('../../static/editor/store.js');
 const { Viewport2D } = await import('../../static/editor/viewport2d.js');
 const { Interactions2D } = await import('../../static/editor/interactions2d.js');
+const { Inspector } = await import('../../static/editor/inspector.js');
 
 // Two-layer fixture: A (root, 100mm box at (100,100) scale 1.6) and
 // B (child of A, 60mm box, identity pose).
@@ -90,6 +92,7 @@ function makeEnv() {
   store.doc = structuredClone(fixture);
   store.revision = 0;
   store.selectedId = null;
+  store.operationBusy = false;
   store.history = { undo: [], redo: [] };
   const vp = new Viewport2D(document.getElementById('editor-svg'));
   vp.renderCanvas();
@@ -105,10 +108,155 @@ function pointerEvent(type, clientX, clientY, target, extra = {}) {
     clientX, clientY,
     target: target || document.getElementById('editor-svg'),
     button: extra.button ?? 0,
-    pointerId: 1,
+    pointerId: extra.pointerId ?? 1,
     preventDefault: () => {},
   };
 }
+
+test('canvas selection opens the inspector without needing a hierarchy click', () => {
+  const { vp, inter } = makeEnv();
+  const panel = document.createElement('section');
+  document.body.appendChild(panel);
+  let reveals = 0;
+  panel.scrollIntoView = () => { reveals += 1; };
+  new Inspector(panel, vp);
+  const layerEl = document.querySelector('[data-layer-id="B"]');
+  inter._onDown(pointerEvent('pointerdown', 100, 100, layerEl));
+  assert.equal(store.selectedId, 'B');
+  assert.equal(panel.querySelector('input[type="text"]').value, 'Intermedio');
+  assert.equal(reveals, 0, "selection must not scroll the canvas under a held pointer");
+  inter._onUp(pointerEvent('pointerup', 100, 100, document.getElementById('editor-svg')));
+  assert.equal(store.selectedId, 'B', 'pointer capture must preserve selection');
+  assert.equal(reveals, 1, 'reveal properties after releasing the pointer');
+  inter._onDown(pointerEvent('pointerdown', 0, 0, document.getElementById('editor-svg')));
+  assert.equal(store.selectedId, null);
+  assert.match(panel.textContent, /Sin selección/);
+  inter._cancelGesture();
+  panel.remove();
+});
+
+test('a second pointer cannot move or finish the active gesture', () => {
+  const { inter } = makeEnv();
+  const layerEl = [...document.querySelectorAll('g.layer')].find(g => g.dataset.layerId === 'A');
+  const initial = { ...store.doc.layers.A.pose };
+  inter._onDown(pointerEvent('pointerdown', 100, 100, layerEl, { pointerId: 7 }));
+  inter._onMove(pointerEvent('pointermove', 160, 100, layerEl, { pointerId: 8 }));
+  assert.deepEqual(store.doc.layers.A.pose, initial);
+  inter._onUp(pointerEvent('pointerup', 160, 100, layerEl, { pointerId: 8 }));
+  assert.equal(inter._gesture?.kind, 'drag');
+  inter._cancelGesture();
+});
+
+test('busy operations block pointer gestures, history shortcuts, and wheel zoom', () => {
+  const { inter } = makeEnv();
+  const svg = document.getElementById('editor-svg');
+  const layerEl = [...document.querySelectorAll('g.layer')].find(g => g.dataset.layerId === 'A');
+  const beforeViewport = { ...store.viewport };
+  let undoCalled = false;
+  inter.undo = () => { undoCalled = true; return true; };
+  store.operationBusy = true;
+
+  inter._onDown(pointerEvent('pointerdown', 100, 100, layerEl));
+  inter._onKeyDown({ key: 'z', ctrlKey: true, shiftKey: false, target: document.body, preventDefault() {} });
+  inter._onWheel({ deltaY: -100, clientX: 100, clientY: 100, target: svg, preventDefault() {} });
+
+  assert.equal(inter._gesture, null);
+  assert.equal(undoCalled, false);
+  assert.deepEqual(store.viewport, beforeViewport);
+  store.operationBusy = false;
+});
+
+test('pose clamp coalesces a pointermove burst to one calculation per frame', async () => {
+  const { inter } = makeEnv();
+  const layerEl = [...document.querySelectorAll('g.layer')].find(g => g.dataset.layerId === 'A');
+  let clamps = 0;
+  inter._maybeClampPose = (_id, pose) => { clamps += 1; return pose; };
+  inter._onDown(pointerEvent('pointerdown', 100, 100, layerEl));
+  for (let i = 0; i < 20; i++) inter._onMove(pointerEvent('pointermove', 101 + i, 100, layerEl));
+  await new Promise(resolve => setTimeout(resolve, 20));
+  assert.equal(clamps, 1);
+  assert.equal(inter._gesture.lastRawPose.tx, 120);
+  inter._cancelGesture();
+});
+
+test('pointerup flushes the latest release point and cancels queued preview RAF', async () => {
+  const { inter } = makeEnv();
+  const layerEl = [...document.querySelectorAll('g.layer')].find(g => g.dataset.layerId === 'A');
+  inter._maybeClampPose = (_id, pose) => pose;
+  const poses = [];
+  const previousCommit = store.commitCommand;
+  store.commitCommand = async (_type, payload) => { poses.push(payload.pose); return {}; };
+  inter._onDown(pointerEvent('pointerdown', 100, 100, layerEl));
+  inter._onMove(pointerEvent('pointermove', 110, 100, layerEl));
+  inter._onMove(pointerEvent('pointermove', 120, 100, layerEl));
+  inter._onUp(pointerEvent('pointerup', 135, 100, layerEl));
+  await new Promise(resolve => setTimeout(resolve, 20));
+  assert.equal(poses.length, 1);
+  assert.equal(poses[0].tx, 135);
+  assert.equal(inter._pendingPose, null);
+  assert.equal(inter._rafId, null);
+  store.commitCommand = previousCommit;
+});
+
+test('release flush does not enqueue a duplicate live server preview', async () => {
+  const { inter, vp } = makeEnv();
+  store.matrioskaMode = true;
+  const layerEl = vp._layerEls.get('B');
+  let previews = 0;
+  inter._maybeClampPose = (_id, pose) => pose;
+  inter._scheduleServerPreview = () => { previews += 1; };
+  inter._onDown(pointerEvent('pointerdown', 100, 100, layerEl));
+  inter._onMove(pointerEvent('pointermove', 120, 100, layerEl));
+  await new Promise(resolve => setTimeout(resolve, 20));
+  assert.equal(previews, 1);
+  inter._onUp(pointerEvent('pointerup', 135, 100, layerEl));
+  assert.equal(previews, 1);
+  store.matrioskaMode = false;
+});
+
+test('cancel discards a queued pose calculation and no-op clicks do not fit', async () => {
+  const { inter } = makeEnv();
+  const layerEl = [...document.querySelectorAll('g.layer')].find(g => g.dataset.layerId === 'A');
+  let clamps = 0;
+  inter._maybeClampPose = (_id, pose) => { clamps += 1; return pose; };
+  inter._onDown(pointerEvent('pointerdown', 100, 100, layerEl));
+  inter._onMove(pointerEvent('pointermove', 140, 100, layerEl));
+  inter._cancelGesture();
+  await new Promise(resolve => setTimeout(resolve, 20));
+  assert.equal(clamps, 0);
+
+  inter._onDown(pointerEvent('pointerdown', 100, 100, layerEl));
+  inter._onUp(pointerEvent('pointerup', 100, 100, layerEl));
+  assert.equal(clamps, 0);
+});
+
+test('async pose finalization holds operationBusy through fit and releases on failure', async () => {
+  const { inter } = makeEnv();
+  store.matrioskaMode = true;
+  const previousFetch = globalThis.fetch;
+  let releaseFit;
+  let fitCalls = 0;
+  globalThis.fetch = async () => {
+    fitCalls += 1;
+    if (fitCalls === 1) await new Promise(resolve => { releaseFit = resolve; });
+    throw new Error('fit unavailable');
+  };
+  const previousCommit = store.commitCommand;
+  store.commitCommand = async () => { throw new Error('commit unavailable'); };
+
+  const pending = inter._commitPose('B', { ...store.doc.layers.B.pose });
+  assert.equal(store.operationBusy, true);
+  // A second gesture entry is rejected while fit/constrain is outstanding.
+  inter._onDown(pointerEvent('pointerdown', 100, 100, document.getElementById('editor-svg')));
+  assert.equal(inter._gesture, null);
+  releaseFit();
+  await pending;
+  assert.equal(store.operationBusy, false);
+
+  store.commitCommand = previousCommit;
+  globalThis.fetch = previousFetch;
+  store.matrioskaMode = false;
+});
 
 test('100 pointermove events produce exactly ONE committed command', async () => {
   const { inter } = makeEnv();
@@ -339,4 +487,88 @@ test('pointercancel restores the initial pose (no commit)', async () => {
   store.commitCommand = origCommit;
   assert.equal(commitCount, 0, 'no commit on pointercancel');
   assert.deepEqual(store.doc.layers.A.pose, initialPose, 'pose restored after pointercancel');
+});
+
+
+test('an intermediate drag previews its descendants without mutating the document', async () => {
+  const { vp, inter } = makeEnv();
+  store.doc.layers.C = { ...structuredClone(store.doc.layers.B), id: 'C', parent_id: 'B',
+    pose: { tx: 5, ty: 0, scale: 0.3, angle_deg: 0 } };
+  vp.renderLayers();
+  const before = structuredClone(store.doc.layers);
+  const child = vp._layerEls.get('C');
+  const childStart = child.getAttribute('transform');
+  inter._maybeClampPose = (_id, pose) => pose;
+  inter._scheduleServerPreview = () => {};
+  inter._onDown(pointerEvent('pointerdown', 100, 100, vp._layerEls.get('B')));
+  inter._onMove(pointerEvent('pointermove', 120, 100));
+  await new Promise(resolve => setTimeout(resolve, 20));
+  assert.notEqual(child.getAttribute('transform'), childStart);
+  const matrixValues = text => text.match(/matrix\((.*)\)/)[1].split(/\s+/).map(Number);
+  assert.equal(matrixValues(child.getAttribute('transform'))[4] - matrixValues(childStart)[4], 20);
+  assert.deepEqual(store.doc.layers, before);
+  inter._cancelGesture();
+  assert.equal(vp._layerEls.get('C').getAttribute('transform'), childStart);
+});
+
+test('a shrunk child can grow in the live preview before a server response', async () => {
+  const { vp, inter } = makeEnv();
+  store.doc.layers.B.pose.scale = 0.2;
+  inter._maybeClampPose = (_id, pose) => ({ ...pose, scale: 1 });
+  inter._scheduleServerPreview = () => {};
+  inter._onDown(pointerEvent('pointerdown', 100, 100, vp._layerEls.get('B')));
+  inter._onMove(pointerEvent('pointermove', 110, 100));
+  await new Promise(resolve => setTimeout(resolve, 20));
+  assert.equal(inter._pendingPose.pose.scale, 1);
+  inter._cancelGesture();
+});
+
+test('returning inward queues a fresh fit and ignores a late edge preview', async () => {
+  const { inter } = makeEnv();
+  store.matrioskaMode = true;
+  const oldFetch = globalThis.fetch;
+  const requests = [];
+  globalThis.fetch = async (_url, opts) => new Promise(resolve => {
+    requests.push({ body: JSON.parse(opts.body), resolve });
+  });
+  const poses = [];
+  inter._previewPose = (_id, pose) => poses.push(pose);
+  const g = { layerId: 'B', serverPoseFor: { tx: 0, ty: 0 } };
+  inter._gesture = g;
+  const edge = { tx: 50, ty: 0, scale: 0.2, angle_deg: 0 };
+  const center = { tx: 0, ty: 0, scale: 0.2, angle_deg: 0 };
+  try {
+    g.lastRawPose = edge;
+    inter._scheduleServerPreview(g, edge);
+    g.lastRawPose = center;
+    inter._scheduleServerPreview(g, center);
+    requests[0].resolve({ ok: true, json: async () => ({ pose_local: edge }) });
+    await new Promise(resolve => setTimeout(resolve, 0));
+    assert.equal(requests.length, 2);
+    assert.equal(requests[1].body.pose.tx, 0);
+    assert.equal(poses.length, 0, 'stale edge result must not overwrite current preview');
+    requests[1].resolve({ ok: true, json: async () => ({ pose_local: { ...center, scale: 1 } }) });
+    await new Promise(resolve => setTimeout(resolve, 0));
+    assert.equal(poses.at(-1).scale, 1);
+  } finally {
+    globalThis.fetch = oldFetch;
+    inter._gesture = null;
+    store.matrioskaMode = false;
+  }
+});
+
+test('release away from the last fitted edge requests a fit, not a shrink-only clamp', () => {
+  const { vp, inter } = makeEnv();
+  inter._onDown(pointerEvent('pointerdown', 100, 100, vp._layerEls.get('B')));
+  inter._gesture.serverPose = { tx: 50, ty: 0, scale: 0.2, angle_deg: 0 };
+  inter._gesture.serverPoseFor = { tx: 50, ty: 0 };
+  inter._gesture.serverPoseExact = true;
+  inter._gesture.lastRawPose = { tx: 0, ty: 0, scale: 1, angle_deg: 0 };
+  inter._pendingPose = { layerId: 'B', pose: { tx: 0, ty: 0, scale: 0.2, angle_deg: 0 } };
+  let request;
+  inter._commitPose = (id, pose, opts) => { request = { id, pose, opts }; };
+  inter._onUp(pointerEvent('pointerup', 100, 100));
+  assert.equal(request.pose.tx, 0);
+  assert.notEqual(request.opts.constrainOnly, true);
+  assert.notEqual(request.opts.skipServerFit, true);
 });

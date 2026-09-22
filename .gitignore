@@ -10,3 +10,5 @@ _ref
 node_modules
 data/jobs
 data/documents
+data
+tests/fixtures

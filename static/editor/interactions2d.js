@@ -31,6 +31,7 @@ export class Interactions2D {
     this._rafId = null;
     this._pendingRender = null;
     this._spaceDown = false;
+    this._activePointerId = null;
     this._bind();
   }
 
@@ -59,7 +60,7 @@ export class Interactions2D {
 
   undo() {
     const h = store.history;
-    if (!h || !h.undo.length || !store.doc) return false;
+    if (!h || Array.isArray(h) || !h.undo?.length || !store.doc) return false;
     const snap = h.undo.pop();
     h.redo.push(this._snapshot());
     this._restore(snap);
@@ -68,7 +69,7 @@ export class Interactions2D {
 
   redo() {
     const h = store.history;
-    if (!h || !h.redo.length || !store.doc) return false;
+    if (!h || Array.isArray(h) || !h.redo?.length || !store.doc) return false;
     const snap = h.redo.pop();
     h.undo.push(this._snapshot());
     this._restore(snap);
@@ -107,6 +108,15 @@ export class Interactions2D {
     return t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' || t.tagName === 'SELECT' || t.isContentEditable);
   }
 
+  _isOperationBusy() {
+    return !!(store.operationBusy || store.commandBusy);
+  }
+
+  _cancelFrame(id) {
+    if (globalThis.cancelAnimationFrame) globalThis.cancelAnimationFrame(id);
+    else clearTimeout(id);
+  }
+
   _onKeyDown(e) {
     if (this._inInput(e)) return; // never capture shortcuts inside inputs
     if (e.code === 'Space' && !this._spaceDown) {
@@ -116,8 +126,12 @@ export class Interactions2D {
     } else if (e.key === 'Escape' && this._gesture) {
       this._cancelGesture();
     } else if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'z' && !e.shiftKey) {
+      if (this._isOperationBusy()) return;
+      if (Array.isArray(store.history)) return; // editor.js owns production history
       if (this.undo()) e.preventDefault();
     } else if ((e.ctrlKey || e.metaKey) && (e.key.toLowerCase() === 'y' || (e.key.toLowerCase() === 'z' && e.shiftKey))) {
+      if (this._isOperationBusy()) return;
+      if (Array.isArray(store.history)) return;
       if (this.redo()) e.preventDefault();
     }
   }
@@ -168,6 +182,8 @@ export class Interactions2D {
   // ------------------------------------------------------------------
 
   _onDown(e) {
+    if (this._isOperationBusy()) return;
+    if (this._gesture) return;
     // Middle button → pan (spec task 08 step 5)
     if (e.button === 1) {
       e.preventDefault();
@@ -200,14 +216,19 @@ export class Interactions2D {
         this._startPan(e);
         return;
       }
+      if (!node) return;
+      store.select(layerId);
+      this.viewport.renderSelection();
+      window.dispatchEvent(new CustomEvent('editor:selection', {
+        detail: { layerId, source: 'canvas' },
+      }));
       if (node?.locked) {
         this._flash('Capa bloqueada.');
         return;
       }
-      store.select(layerId);
-      this.viewport.renderLayers();
       this._gesture = {
         kind: 'drag',
+        pointerId: e.pointerId,
         layerId,
         startPose: { ...node.pose },
         startWorld: pt,
@@ -215,19 +236,28 @@ export class Interactions2D {
         revisionAtStart: store.revision,
       };
       this.svg.setPointerCapture?.(e.pointerId);
+      this._activePointerId = e.pointerId;
       return;
     }
 
     // Empty space → pan
+    store.clearSelection();
+    this.viewport.renderSelection();
+    window.dispatchEvent(new CustomEvent('editor:selection', {
+      detail: { layerId: null, source: 'canvas' },
+    }));
     this._startPan(e);
   }
 
   _startPan(e) {
     this._gesture = {
       kind: 'pan',
+      pointerId: e.pointerId,
       startClient: { x: e.clientX, y: e.clientY },
       startViewport: { ...store.viewport },
+      screenToDocument: this.svg.getScreenCTM?.()?.inverse?.() || null,
     };
+    this._activePointerId = e.pointerId;
     this.svg.setPointerCapture?.(e.pointerId);
     this.svg.style.cursor = 'grabbing';
   }
@@ -250,6 +280,7 @@ export class Interactions2D {
       );
       this._gesture = {
         kind: 'scale',
+        pointerId: e.pointerId,
         layerId,
         startPose: { ...node.pose },
         parentWorld,
@@ -269,6 +300,7 @@ export class Interactions2D {
       const childWorlds = childrenAreDetached() ? childWorldSnapshots(layerId) : null;
       this._gesture = {
         kind: 'rotate',
+        pointerId: e.pointerId,
         layerId,
         startPose: { ...node.pose },
         parentWorld,
@@ -279,6 +311,7 @@ export class Interactions2D {
       };
     }
     this.svg.setPointerCapture?.(e.pointerId);
+    this._activePointerId = e.pointerId;
   }
 
   // ------------------------------------------------------------------
@@ -287,18 +320,40 @@ export class Interactions2D {
 
   _onMove(e) {
     const g = this._gesture;
-    if (!g) return;
-    const pt = this._docPoint(e);
+    if (!g || (g.pointerId != null && e.pointerId != null && e.pointerId !== g.pointerId)) return;
 
     if (g.kind === 'pan') {
-      const ctm = this.svg.getScreenCTM();
-      if (!ctm) return;
-      const dx = (e.clientX - g.startClient.x) / ctm.a;
-      const dy = (e.clientY - g.startClient.y) / ctm.d;
+      let pt;
+      try { pt = this._docPoint(e); } catch { return; }
+      const inv = g.screenToDocument;
+      if (!inv) return;
+      const p0 = new DOMPoint(g.startClient.x, g.startClient.y).matrixTransform(inv);
+      const p1 = new DOMPoint(e.clientX, e.clientY).matrixTransform(inv);
+      const dx = p1.x - p0.x;
+      const dy = p1.y - p0.y;
       store.setViewport(g.startViewport.x - dx, g.startViewport.y - dy, g.startViewport.scale);
       this.viewport.applyViewport();
       return;
     }
+
+    // Contour fitting can perform many isPointInPath calls. Keep pointermove
+    // cheap and calculate at most once per frame; pointerup flushes the latest
+    // coordinates synchronously below so release position remains exact.
+    g.latestMove = {
+      clientX: e.clientX, clientY: e.clientY, pointerId: e.pointerId,
+      shiftKey: !!e.shiftKey,
+    };
+    if (g.moveRaf) return;
+    g.moveRaf = requestAnimationFrame(() => {
+      g.moveRaf = null;
+      if (this._gesture === g && g.latestMove) this._processPoseMove(g.latestMove, g);
+    });
+  }
+
+  _processPoseMove(e, g, { scheduleServer = true } = {}) {
+    g.processedMove = { clientX: e.clientX, clientY: e.clientY, shiftKey: !!e.shiftKey };
+    let pt;
+    try { pt = this._docPoint(e); } catch { return; }
 
     let pose = null;
     if (g.kind === 'drag') {
@@ -321,34 +376,12 @@ export class Interactions2D {
       this._flash(`${Math.round(((deg % 360) + 360) % 360)}°`);
     }
     if (pose) {
-      if (g.kind === 'drag' && g.serverPose && g.serverPoseFor) {
-        // Once the server has answered, show ITS pose (size AND the centre it
-        // settled on), displaced only by how far the pointer moved since that
-        // request.  The preview is then exactly what the drop commits.
-        const raw = pose;
-        g.lastRawPose = raw;
-        const shifted = {
-          ...g.serverPose,
-          tx: g.serverPose.tx + (raw.tx - g.serverPoseFor.tx),
-          ty: g.serverPose.ty + (raw.ty - g.serverPoseFor.ty),
-        };
-        // The client clamp returns the LARGEST size its (optimistic) test
-        // accepts; never show more than the server said — only less, when
-        // the pointer dragged the piece somewhere the server size no longer fits.
-        const clamped = this._maybeClampPose(g.layerId, shifted);
-        pose = (clamped.scale + 1e-9 >= shifted.scale) ? shifted : clamped;
-      } else {
-        g.lastRawPose = pose;
-        pose = this._maybeClampPose(g.layerId, pose);
-        // Before the first server answer never GROW on the client's optimistic
-        // estimate — only shrink when it stops fitting.  Growth always comes
-        // from the server, so the piece never overshoots and snaps back.
-        if (g.kind === 'drag' && g.startPose && pose.scale > g.startPose.scale) {
-          pose = { ...pose, scale: g.startPose.scale };
-        }
-      }
+      g.lastRawPose = pose;
+      // Preview the available size at the CURRENT pointer position. An old
+      // server answer (often from the edge) must not cap inward growth.
+      pose = this._maybeClampPose(g.layerId, pose);
       this._previewPose(g.layerId, pose);
-      if (g.kind === 'drag') this._scheduleServerPreview(g, g.lastRawPose);
+      if (scheduleServer && g.kind === 'drag') this._scheduleServerPreview(g, g.lastRawPose);
     }
   }
 
@@ -363,8 +396,8 @@ export class Interactions2D {
     if (!rawPose) return;
     // Only ask again once the pointer has really moved since the last answer
     // (or request): a still hand must not trigger a stream of re-fits.
-    const ref = g.serverPoseFor || g.previewSentFor;
-    if (ref && Math.hypot(rawPose.tx - ref.tx, rawPose.ty - ref.ty) < 1.5) return;
+    const ref = g.previewSentFor || g.serverPoseFor;
+    if (!g.previewInFlight && ref && Math.hypot(rawPose.tx - ref.tx, rawPose.ty - ref.ty) < 1.5) return;
     g.previewWanted = { tx: rawPose.tx, ty: rawPose.ty, angle_deg: rawPose.angle_deg, scale: rawPose.scale };
     if (g.previewInFlight) return;
     const run = async () => {
@@ -404,21 +437,22 @@ export class Interactions2D {
           g.serverPose = next;
           g.serverPoseFor = { tx: want.tx, ty: want.ty };
           g.serverPoseExact = true;
-          // Show the server answer, displaced by the pointer movement since.
+          // Ignore results for an earlier pointer position. They are useful
+          // as a cache only; translating them would keep the old tiny scale.
           const cur = g.lastRawPose || want;
-          const shown = {
-            ...g.serverPose,
-            tx: g.serverPose.tx + (cur.tx - want.tx),
-            ty: g.serverPose.ty + (cur.ty - want.ty),
-          };
-          const clamped = this._maybeClampPose(g.layerId, shown);
-          this._previewPose(g.layerId, (clamped.scale + 1e-9 >= shown.scale) ? shown : clamped);
+          if (Math.hypot(cur.tx - want.tx, cur.ty - want.ty) < 0.25) {
+            this._previewPose(g.layerId, next);
+          }
         }
       } catch (err) {
         console.warn('preview fit failed', err);
       }
       g.previewInFlight = false;
-      if (g.previewWanted && this._gesture === g) run();
+      if (g.previewWanted && this._gesture === g) {
+        const latest = g.previewWanted;
+        if (Math.hypot(latest.tx - want.tx, latest.ty - want.ty) >= 0.25) run();
+        else g.previewWanted = null;
+      }
     };
     run();
   }
@@ -468,7 +502,9 @@ export class Interactions2D {
         const parent = store.layerById(node.parent_id);
         const pAsset = store.assetById(parent?.asset_id);
         if (!pAsset) return pose;
-        const padding = this._childPaddingMm(node);
+        const parentM = this._parentWorldMatrix(layerId);
+        const parentScale = Math.hypot(parentM[0], parentM[1]);
+        const padding = this._childPaddingMm(node) / Math.max(parentScale, 1e-9);
         // ``inflate`` would slide the centre away from the pointer to grow a
         // little more — that reads as the piece fighting the hand.  While the
         // user drags, the centre IS the pointer and only the scale adapts.
@@ -507,17 +543,27 @@ export class Interactions2D {
       this._rafId = null;
       const p = this._pendingPose;
       if (!p) return;
-      const el = this.viewport._layerEls.get(p.layerId);
-      if (!el) return;
-      const asset = store.assetById(store.layerById(p.layerId)?.asset_id);
       const node = store.layerById(p.layerId);
+      if (!node) return;
       const parentM = this._parentWorldMatrix(p.layerId);
-      let world = affine.multiply(parentM, affine.layerMatrix({ ...node, pose: p.pose }));
-      // Paths live in source SVG units; include N + viewBox correction.
-      if (asset) {
-        world = affine.multiply(world, affine.pathToLocalMatrix(asset));
+      const oldWorld = affine.multiply(parentM, affine.matrix(node.pose));
+      const newWorld = affine.multiply(parentM, affine.matrix(p.pose));
+      const delta = affine.multiply(newWorld, affine.inverse(oldWorld));
+      // The SVG contains flat world-space groups: moving only the selected
+      // group leaves its children visibly stuck until the command finishes.
+      for (const id of store.subtreeIds(p.layerId)) {
+        const el = this.viewport._layerEls.get(id);
+        const child = store.layerById(id);
+        const asset = store.assetById(child?.asset_id);
+        if (!el || !asset) continue;
+        const world = affine.multiply(delta, this.viewport._worldMatrix(id, asset));
+        el.setAttribute('transform', `matrix(${world.join(' ')})`);
       }
-      el.setAttribute('transform', `matrix(${world.join(' ')})`);
+      const outline = this.viewport.handles?.firstElementChild;
+      if (outline && store.selectedId === p.layerId) {
+        const world = affine.multiply(delta, this.viewport._layerMatrix(p.layerId));
+        outline.setAttribute('transform', `matrix(${world.join(' ')})`);
+      }
     });
   }
 
@@ -527,40 +573,62 @@ export class Interactions2D {
 
   _onUp(e) {
     const g = this._gesture;
+    if (!g || (g.pointerId != null && e.pointerId != null && e.pointerId !== g.pointerId)) return;
+    // Flush a release that differs from the last processed frame while the
+    // gesture is still active, preserving cached clamp state. Do not start a
+    // new live server preview for the release; commit handles final fitting.
+    if (g.latestMove) {
+      const same = g.processedMove
+        && g.processedMove.clientX === e.clientX
+        && g.processedMove.clientY === e.clientY
+        && g.processedMove.shiftKey === !!e.shiftKey;
+      if (!same) {
+        this._processPoseMove({
+          clientX: e.clientX, clientY: e.clientY, pointerId: e.pointerId,
+          shiftKey: !!e.shiftKey,
+        }, g, { scheduleServer: false });
+      }
+    }
     this._gesture = null;
+    this._activePointerId = null;
+    this.svg.releasePointerCapture?.(e.pointerId);
     this.svg.style.cursor = '';
     if (!g) return;
 
     if (g.kind === 'pan') return; // viewport is UI state, nothing to commit
 
+    // The queued preview may not have run yet. Calculate the release point
+    // before consuming the gesture so the committed pose matches pointerup.
     // Commit the pending pose as ONE transaction (spec task 08 step 4).
     const pending = this._pendingPose;
     this._pendingPose = null;
-    if (!pending) return;
+    if (g.moveRaf) {
+      this._cancelFrame(g.moveRaf);
+      g.moveRaf = null;
+    }
+    if (this._rafId) {
+      this._cancelFrame(this._rafId);
+      this._rafId = null;
+    }
+    if (!pending) {
+      window.dispatchEvent(new CustomEvent('editor:selection-reveal', { detail: { layerId: store.selectedId } }));
+      return;
+    }
     if (store.revision !== g.revisionAtStart) {
       // A remote change happened mid-gesture: do not commit.
       this.viewport.renderLayers();
       return;
     }
     this.pushHistory();
-    if (g.kind === 'drag' && g.serverPose && g.serverPoseFor && g.lastRawPose) {
-      const d = Math.hypot(g.serverPoseFor.tx - g.lastRawPose.tx, g.serverPoseFor.ty - g.lastRawPose.ty);
+    if (g.kind === 'drag' && g.serverPose && g.serverPoseFor) {
+      const d = Math.hypot(g.serverPoseFor.tx - pending.pose.tx, g.serverPoseFor.ty - pending.pose.ty);
       if (d < 0.25 && g.serverPoseExact) {
-        // The preview on screen IS the server answer for this spot: commit it
-        // as-is, no second fit, no size jump.
         this._commitPose(pending.layerId, g.serverPose, { skipServerFit: true });
         return;
       }
-      // Shown pose = a server answer translated by hand: keep it, only make
-      // sure it is valid (constrain shrinks in place if it is not).
-      const shown = {
-        ...g.serverPose,
-        tx: g.serverPose.tx + (g.lastRawPose.tx - g.serverPoseFor.tx),
-        ty: g.serverPose.ty + (g.lastRawPose.ty - g.serverPoseFor.ty),
-      };
-      this._commitPose(pending.layerId, shown, { constrainOnly: true });
-      return;
     }
+    // Always fit the dropped position when the last answer belongs elsewhere.
+    // A constrain-only pass can shrink, but cannot grow back away from an edge.
     this._commitPose(pending.layerId, pending.pose, {
       // Children ride along with a rotating parent (rigid, nothing to re-fit)
       // unless the user asked to turn this layer alone.
@@ -569,6 +637,34 @@ export class Interactions2D {
   }
 
   async _commitPose(layerId, pose, { skipServerFit = false, constrainOnly = false, keepChildren = null } = {}) {
+    // Keep the whole async finalization exclusive. Fit/constrain happens before
+    // store.commitCommand starts its queue, so commandBusy alone cannot close
+    // the race with another gesture or operation.
+    if (store.operationBusy || store.commandBusy) {
+      this.viewport.renderLayers();
+      this.viewport.renderSelection();
+      return false;
+    }
+    store.operationBusy = true;
+    window.dispatchEvent(new CustomEvent('editor:operation-state', { detail: { busy: true } }));
+    try {
+      const finalize = () => this._commitPoseUnlocked(layerId, pose, {
+        skipServerFit, constrainOnly, keepChildren,
+      });
+      // Parent rotation plus keep-children restoration is one user action in
+      // production history. Test fixtures use the legacy {undo, redo} shape.
+      return await (Array.isArray(store.history) && typeof store.withHistoryGroup === 'function'
+        ? store.withHistoryGroup(finalize)
+        : finalize());
+    } finally {
+      store.operationBusy = false;
+      window.dispatchEvent(new CustomEvent('editor:operation-state', { detail: { busy: false } }));
+      window.dispatchEvent(new CustomEvent('editor:doc-changed'));
+      window.dispatchEvent(new CustomEvent('editor:selection-reveal', { detail: { layerId: store.selectedId } }));
+    }
+  }
+
+  async _commitPoseUnlocked(layerId, pose, { skipServerFit = false, constrainOnly = false, keepChildren = null } = {}) {
     const cleaned = {
       tx: Number(pose.tx),
       ty: Number(pose.ty),
@@ -663,7 +759,7 @@ export class Interactions2D {
   }
 
   _onCancel(e) {
-    if (!this._gesture) return;
+    if (!this._gesture || (this._gesture.pointerId != null && e.pointerId != null && e.pointerId !== this._gesture.pointerId)) return;
     this._cancelGesture();
   }
 
@@ -671,6 +767,11 @@ export class Interactions2D {
     // Escape / pointercancel: restore the initial pose, no commit.
     const g = this._gesture;
     this._gesture = null;
+    this._activePointerId = null;
+    if (g?.moveRaf) this._cancelFrame(g.moveRaf);
+    if (this._rafId) this._cancelFrame(this._rafId);
+    if (g) g.moveRaf = null;
+    this._rafId = null;
     this._pendingPose = null;
     this.svg.style.cursor = '';
     if (g && g.kind !== 'pan') {
@@ -686,6 +787,11 @@ export class Interactions2D {
 
   _onWheel(e) {
     e.preventDefault();
+    if (this._isOperationBusy()) return;
+    // Do not change the camera while a pose gesture is in progress: the
+    // captured parent frame and pointer coordinates must remain stable until
+    // pointerup. Wheel remains available over an idle canvas (and pan).
+    if (this._gesture && this._gesture.kind !== 'pan') return;
     const factor = Math.exp(-e.deltaY * 0.001);
     const vp = store.viewport;
     const newScale = Math.min(50, Math.max(0.01, vp.scale * factor));

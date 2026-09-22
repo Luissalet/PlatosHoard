@@ -172,34 +172,41 @@ def test_unknown_command_rejected_not_simulated(store: DocumentStore) -> None:
 def test_restore_snapshot_restores_content_and_increments_revision(store: DocumentStore) -> None:
     doc_id, _ = _make_layer_doc(store)
     before = store.load_document(doc_id)
-    snapshot = {"assets": before["assets"], "layers": before["layers"]}
-    # move the layer, then undo back to the snapshot
+    snapshot = {"canvas": before["canvas"], "assets": before["assets"], "layers": before["layers"]}
+    # resize and move, then undo back to the snapshot
+    store.commit_command(doc_id, {
+        "command_id": "cmd-canvas",
+        "base_revision": 0,
+        "type": "set_canvas",
+        "payload": {"width_mm": 321, "height_mm": 234},
+    })
     store.commit_command(doc_id, {
         "command_id": "cmd-move",
-        "base_revision": 0,
+        "base_revision": 1,
         "type": "set_pose",
         "payload": {"layer_id": "L1", "pose": {"tx": 99, "ty": 99, "scale": 3.0, "angle_deg": 30}},
     })
     result = store.commit_command(doc_id, {
         "command_id": "cmd-undo",
-        "base_revision": 1,
+        "base_revision": 2,
         "type": "restore_snapshot",
         "payload": {"snapshot": snapshot},
     })
-    assert result["revision"] == 2  # undo creates a NEW revision, never decrements
+    assert result["revision"] == 3  # undo creates a NEW revision, never decrements
     assert result["document"]["layers"]["L1"]["pose"] == before["layers"]["L1"]["pose"]
     # document identity preserved
     assert result["document"]["id"] == before["id"]
     assert result["document"]["canvas"] == before["canvas"]
     # persisted
     on_disk = json.loads((store.documents_dir / f"{doc_id}.json").read_text(encoding="utf-8"))
-    assert on_disk["document"]["revision"] == 2
+    assert on_disk["document"]["revision"] == 3
     assert on_disk["document"]["layers"]["L1"]["pose"]["tx"] == 10
 
 
 def test_restore_snapshot_invalid_payload_rejected(store: DocumentStore) -> None:
     doc_id, _ = _make_layer_doc(store)
-    for bad in ({"snapshot": None}, {"snapshot": {"assets": {}}}, {"snapshot": {"layers": {}}}, {}):
+    for bad in ({"snapshot": None}, {"snapshot": {"assets": {}}}, {"snapshot": {"layers": {}}},
+                {"snapshot": {"assets": {}, "layers": {}}}, {}):
         with pytest.raises(CommandError) as exc:
             store.commit_command(doc_id, {
                 "command_id": f"cmd-bad-{bad}",

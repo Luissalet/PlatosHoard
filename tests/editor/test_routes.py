@@ -67,11 +67,11 @@ def test_editor_route_has_no_duplicate_ids(client):
 
 
 def test_legacy_route_still_returns_200(client):
-    response = client.get("/")
+    response = client.get("/legacy")
 
     assert response.status_code == 200
     html = response.get_data(as_text=True)
-    assert "Silhouette 3D" in html
+    assert "Plato's Hoard" in html
     assert "api/process" in html
 
 
@@ -102,3 +102,9 @@ def test_legacy_api_process_contract_rejects_non_png(client):
 
     assert response.status_code == 400
     assert response.get_json() == {"error": "Only PNG files are supported"}
+
+
+def test_home_opens_editor(client):
+    response = client.get("/")
+    assert response.status_code == 302
+    assert response.headers["Location"] == "/editor"

@@ -171,6 +171,12 @@ _FINE_BOUNDARY_PTS = 1400
 _FINE_INTERIOR_PTS = 400
 # Max candidate centres per scale in the coarse phase.
 _COARSE_CENTRES = 2400
+# Live hierarchy/drag fitting is exact-validated but does not need the full
+# search density.  Keeping separate constants avoids reducing manual
+# full-quality "best fit" results.
+_FAST_BOUNDARY_PTS = 240
+_FAST_INTERIOR_PTS = 64
+_FAST_COARSE_CENTRES = 1200
 
 
 class _Raster:
@@ -340,7 +346,10 @@ def fit_inside(
     if time_limit_s is not None:
         time_limit_s = _finite(time_limit_s, "time_limit_s", positive=True)
 
-    if fixed_center is not None:
+    # With positive padding or sibling obstacles the distance field cheaply
+    # rejects most scales; repeating exact boundary-distance/intersection
+    # predicates at every step is slower than the raster path.
+    if fixed_center is not None and padding_mm == 0 and not obstacles:
         fixed_center = tuple(_finite(v, "fixed_center") for v in fixed_center)
         if len(fixed_center) != 2:
             raise FittingError("INVALID_CENTER", "Expected (x, y)")
@@ -372,13 +381,6 @@ def fit_inside(
         return FitResult(None, "empty_container", 0)
 
     ux0, uy0, ux1, uy1 = usable.bounds
-    long_side = _RASTER_LONG_SIDE_PX // 2 if fast else _RASTER_LONG_SIDE_PX
-    px = max((max(ux1 - ux0, uy1 - uy0) / long_side), 1e-4)
-    raster = _Raster(usable, px)
-    # Raster clearance ≈ true clearance + 0.5 px; ask for one full pixel so
-    # candidates are (almost always) exactly valid.
-    threshold = 1.0 * px
-
     start = time.monotonic()
     count = 0
     reason = "best_found"
@@ -386,6 +388,9 @@ def fit_inside(
 
     def tick(n: int = 1) -> None:
         nonlocal count, reason
+        if count + n > max_evaluations:
+            reason = "evaluation_budget"
+            raise _BudgetReached
         count += n
         if cancelled():
             reason = "cancelled"
@@ -400,28 +405,173 @@ def fit_inside(
 
     def exact_ok(pose: Pose) -> bool:
         cand = apply_pose(local_shape, pose)
-        return fits(parent, cand, padding_mm) and siblings_clear(cand, obstacles, sibling_gap_mm)
+        # ``fits`` also measures boundary distance.  At zero padding that
+        # measurement cannot change the answer after ``covers`` and is very
+        # expensive on detailed traced SVGs (the common rotate/drag case).
+        contained = parent.covers(cand) if padding_mm == 0 else fits(parent, cand, padding_mm)
+        return contained and (not obstacles or siblings_clear(cand, obstacles, sibling_gap_mm))
 
-    coarse_pts = _sample_shape(local_shape, _COARSE_BOUNDARY_PTS, _COARSE_INTERIOR_PTS)
+    # At a fixed centre there is no translation search, so constructing a
+    # distance-field raster and scoring thousands of duplicate centres only
+    # adds latency.  Retain the descending sweep (feasibility need not be
+    # monotone for concave parents/holes), but test each scale exactly.  Once
+    # the first feasible scale is bracketed by the preceding infeasible one,
+    # refine that boundary while always retaining an exactly valid result.
+    if fixed_center is not None:
+        try:
+            for angle in angles:
+                rotated = apply_pose(local_shape, Pose(angle_deg=angle))
+                rx0, ry0, rx1, ry1 = rotated.bounds
+                upper = min(
+                    math.sqrt(usable.area / shape_area),
+                    (ux1 - ux0) / max(rx1 - rx0, 1e-12),
+                    (uy1 - uy0) / max(ry1 - ry0, 1e-12),
+                )
+                # A fixed centre gives a tighter, exact AABB upper bound.
+                # This is especially valuable near a parent's edge, where
+                # starting from the global container bound wastes many
+                # costly vector predicates before reaching a plausible size.
+                cx, cy = fixed_center
+                centre_bounds = []
+                if rx0 < 0:
+                    centre_bounds.append((cx - ux0) / -rx0)
+                if rx1 > 0:
+                    centre_bounds.append((ux1 - cx) / rx1)
+                if ry0 < 0:
+                    centre_bounds.append((cy - uy0) / -ry0)
+                if ry1 > 0:
+                    centre_bounds.append((uy1 - cy) / ry1)
+                if centre_bounds:
+                    upper = min(upper, *centre_bounds)
+                if upper <= 0 or not math.isfinite(upper):
+                    continue
+                lower = upper * _SCALE_FLOOR
+                previous_infeasible = None
+                feasible = None
+                s = upper
+                while s >= lower:
+                    tick()
+                    pose = Pose(fixed_center[0], fixed_center[1], s, angle)
+                    # The already-eroded/obstacle-subtracted usable region is
+                    # a cheap sweep predicate.  It only proposes a scale;
+                    # the original exact predicates still gate every result.
+                    if usable.covers(apply_pose(local_shape, pose)):
+                        feasible = pose
+                        break
+                    previous_infeasible = s
+                    s *= _SCALE_RATIO
+                if feasible is None:
+                    continue
+                if previous_infeasible is not None:
+                    lo, hi = feasible.scale, previous_infeasible
+                    # Eight geometric bisections narrow a 0.9 sweep interval
+                    # to <0.05% in scale.  More iterations are visually
+                    # immaterial and expensive for detailed SVG polygons.
+                    for _ in range(8):
+                        mid = math.sqrt(lo * hi)
+                        tick()
+                        pose = Pose(fixed_center[0], fixed_center[1], mid, angle)
+                        if usable.covers(apply_pose(local_shape, pose)):
+                            lo = mid
+                            feasible = pose
+                        else:
+                            hi = mid
+                # Buffer polygonisation may be fractionally optimistic.
+                # Validate against the original parent and sibling geometry;
+                # if necessary, shrink and refine using exact predicates.
+                tick()
+                if not exact_ok(feasible):
+                    exact_hi = feasible.scale
+                    exact_lo = None
+                    probe = feasible.scale
+                    for _ in range(32):
+                        probe *= 0.99
+                        tick()
+                        candidate = Pose(fixed_center[0], fixed_center[1], probe, angle)
+                        if exact_ok(candidate):
+                            exact_lo = probe
+                            feasible = candidate
+                            break
+                        exact_hi = probe
+                    if exact_lo is None:
+                        continue
+                    for _ in range(6):
+                        mid = math.sqrt(exact_lo * exact_hi)
+                        tick()
+                        candidate = Pose(fixed_center[0], fixed_center[1], mid, angle)
+                        if exact_ok(candidate):
+                            exact_lo = mid
+                            feasible = candidate
+                        else:
+                            exact_hi = mid
+                if best is None or feasible.scale > best.scale + 1e-12:
+                    best = feasible
+        except _BudgetReached:
+            pass
+        if best is None:
+            return FitResult(None, reason if reason != "best_found" else "no_feasible_candidate", count)
+        return FitResult(best, reason, count)
+
+    long_side = _RASTER_LONG_SIDE_PX // 2 if fast else _RASTER_LONG_SIDE_PX
+    px = max((max(ux1 - ux0, uy1 - uy0) / long_side), 1e-4)
+    raster = _Raster(usable, px)
+    # Raster clearance ≈ true clearance + 0.5 px; ask for one full pixel so
+    # candidates are (almost always) exactly valid.
+    threshold = 1.0 * px
+
+    coarse_pts = _sample_shape(
+        local_shape,
+        _FAST_BOUNDARY_PTS if fast else _COARSE_BOUNDARY_PTS,
+        _FAST_INTERIOR_PTS if fast else _COARSE_INTERIOR_PTS,
+    )
     fine_pts = coarse_pts if fast else _sample_shape(local_shape, _FINE_BOUNDARY_PTS, _FINE_INTERIOR_PTS)
 
     def best_centre(pts_local: np.ndarray, R: np.ndarray, s: float,
-                    centres: np.ndarray) -> tuple[float, Optional[np.ndarray]]:
-        """Max over centres of the min clearance; returns (value, centre)."""
+                    centres: np.ndarray,
+                    prefer: Optional[np.ndarray] = None) -> tuple[float, Optional[np.ndarray]]:
+        """Find a feasible centre, or the maximum-clearance one if none fit.
+
+        When several centres pass the raster test, choose the one nearest
+        ``prefer``.  Clearance used to be the tie-breaker here, which made a
+        protruding hand/wing pocket win over the visually useful torso even
+        though both accepted the same (largest) scale.
+        """
         if not len(centres):
             return -1.0, None
         pts = (pts_local @ R.T) * s  # (N, 2) world offsets
         chunk = max(1, int(2_000_000 // max(len(pts), 1)))
         best_v = -1.0
         best_c = None
+        feasible_centres: list[np.ndarray] = []
+        feasible_values: list[np.ndarray] = []
         for i in range(0, len(centres), chunk):
             cs = centres[i:i + chunk]
             vals = raster.lookup_min(cs[:, None, :] + pts[None, :, :])
+            feasible = vals >= threshold
+            if prefer is not None and np.any(feasible):
+                feasible_centres.append(cs[feasible])
+                feasible_values.append(vals[feasible])
             j = int(np.argmax(vals))
             if vals[j] > best_v:
                 best_v = float(vals[j])
                 best_c = cs[j]
-        tick(len(centres))
+        if feasible_centres:
+            cs = np.concatenate(feasible_centres)
+            vals = np.concatenate(feasible_values)
+            # Sparse contour samples can label a bad pocket feasible with
+            # only a sliver of clearance.  Keep candidates close to the
+            # strongest raster evidence, then use centrality as tie-breaker.
+            credible = vals >= max(threshold, best_v * 0.90)
+            cs = cs[credible]
+            vals = vals[credible]
+            delta = cs - prefer
+            j = int(np.argmin(np.einsum("ij,ij->i", delta, delta)))
+            best_c = cs[j]
+            best_v = float(vals[j])
+        # A vectorised raster pass is one objective evaluation.  Counting
+        # every centre made the advertised budget meaningless (a 6,000
+        # budget routinely returned 15,000+ evaluations).
+        tick()
         return best_v, best_c
 
     def refine_centre(pts_local: np.ndarray, R: np.ndarray, s: float,
@@ -433,7 +583,7 @@ def fit_inside(
         ys = np.linspace(centre[1] - r, centre[1] + r, n)
         gx, gy = np.meshgrid(xs, ys)
         cands = np.column_stack([gx.ravel(), gy.ravel()])
-        v, c = best_centre(pts_local, R, s, cands)
+        v, c = best_centre(pts_local, R, s, cands, prefer=centre)
         if c is None or v < 0:
             return -1.0, centre
         return v, c
@@ -452,7 +602,12 @@ def fit_inside(
             cand = apply_pose(local_shape, p)
             outside = cand.difference(usable)
             moved = False
-            if not outside.is_empty and outside.area > 0 and i % 3 != 2:
+            # ``fixed_center`` is a hard API promise (drag-at-position).  The
+            # generic recovery push used to shift the requested point by up
+            # to several millimetres when the raster candidate was slightly
+            # optimistic.  At a fixed centre only shrinking is allowed.
+            if (fixed_center is None and not outside.is_empty
+                    and outside.area > 0 and i % 3 != 2):
                 oc = outside.centroid
                 cc = cand.centroid
                 dx, dy = cc.x - oc.x, cc.y - oc.y
@@ -503,6 +658,7 @@ def fit_inside(
         return p
 
     try:
+        parent_centre = np.array([parent.centroid.x, parent.centroid.y], dtype=float)
         for angle_index, angle in enumerate(angles):
             R = _rot(angle)
             rotated = apply_pose(local_shape, Pose(angle_deg=angle))
@@ -534,7 +690,8 @@ def fit_inside(
                 stride = 0
             else:
                 n_inside = int(raster.mask.sum())
-                stride = max(1, int(math.ceil(math.sqrt(n_inside / _COARSE_CENTRES))))
+                centre_cap = _FAST_COARSE_CENTRES if fast else _COARSE_CENTRES
+                stride = max(1, int(math.ceil(math.sqrt(n_inside / centre_cap))))
                 coarse_centres = raster.inside_centres(stride)
                 if not len(coarse_centres):
                     continue
@@ -545,7 +702,8 @@ def fit_inside(
             c_ok = None
             s = upper
             while s >= lower:
-                v, c = best_centre(coarse_pts, R, s, coarse_centres)
+                v, c = best_centre(coarse_pts, R, s, coarse_centres,
+                                   prefer=parent_centre if fixed_center is None else None)
                 if v >= threshold and c is not None:
                     s_ok, c_ok = s, c
                     break

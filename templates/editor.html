@@ -8,18 +8,19 @@
 <link rel="icon" href="/static/favicon.ico" sizes="any">
 <link rel="icon" type="image/png" sizes="192x192" href="/static/icon-192.png">
 <link rel="apple-touch-icon" href="/static/apple-touch-icon.png">
-  <link rel="stylesheet" href="/static/editor/editor.css?v=20260918j"/>
+  <link rel="stylesheet" href="/static/editor/editor.css?v=20260919a"/>
   <script type="importmap">
   {
     "imports": {
-      "/static/editor/store.js": "/static/editor/store.js?v=20260918j",
-      "/static/editor/affine.mjs": "/static/editor/affine.mjs?v=20260918j",
-      "/static/editor/viewport2d.js": "/static/editor/viewport2d.js?v=20260918j",
-      "/static/editor/layer_tree.js": "/static/editor/layer_tree.js?v=20260918j",
-      "/static/editor/inspector.js": "/static/editor/inspector.js?v=20260918j",
-      "/static/editor/interactions2d.js": "/static/editor/interactions2d.js?v=20260918j",
-      "/static/editor/export_dialog.js": "/static/editor/export_dialog.js?v=20260918j",
-      "/static/editor/viewer3d.mjs": "/static/editor/viewer3d.mjs?v=20260918j"
+      "/static/editor/arrangement.mjs": "/static/editor/arrangement.mjs?v=20260919a",
+      "/static/editor/store.js": "/static/editor/store.js?v=20260919a",
+      "/static/editor/affine.mjs": "/static/editor/affine.mjs?v=20260919a",
+      "/static/editor/viewport2d.js": "/static/editor/viewport2d.js?v=20260919a",
+      "/static/editor/layer_tree.js": "/static/editor/layer_tree.js?v=20260919a",
+      "/static/editor/inspector.js": "/static/editor/inspector.js?v=20260919a",
+      "/static/editor/interactions2d.js": "/static/editor/interactions2d.js?v=20260919a",
+      "/static/editor/export_dialog.js": "/static/editor/export_dialog.js?v=20260919a",
+      "/static/editor/viewer3d.mjs": "/static/editor/viewer3d.mjs?v=20260919a"
     }
   }
   </script>
@@ -27,10 +28,12 @@
 <body class="editor-shell">
   <header id="document-toolbar" class="editor-toolbar" role="toolbar" aria-label="Documento">
     <div class="toolbar-group">
-      <span class="brand">Silhouettes</span>
+      <span class="brand">Plato’s Hoard</span>
       <button type="button" id="editor-new" class="btn-ghost" disabled>Nuevo</button>
       <button type="button" id="editor-open" class="btn-ghost" disabled>Abrir</button>
-      <button type="button" id="editor-save" class="btn-ghost" disabled>Guardar</button>
+      <button type="button" id="editor-save" class="btn-ghost" disabled title="Actualizar el archivo · Ctrl+S">Guardar</button>
+      <button type="button" id="editor-save-as" class="btn-ghost" disabled title="Elegir otro archivo · Ctrl+Mayús+S">Guardar como…</button>
+      <button type="button" id="editor-preview" class="btn-ghost" disabled title="Actualizar vista-plato.png en la carpeta del proyecto">Actualizar vista</button>
       <span class="toolbar-sep"></span>
       <button type="button" id="editor-undo" class="btn-ghost" disabled title="Ctrl+Z">Deshacer</button>
       <button type="button" id="editor-redo" class="btn-ghost" disabled title="Ctrl+Y">Rehacer</button>
@@ -46,7 +49,7 @@
       <label title="Izquierdo"><span class="dir">←</span><input id="canvas-padding-left" type="number" min="0" step="0.5" value="5" disabled/></label>
     </div>
     <div class="toolbar-group">
-      <a class="link" href="/" target="_blank" rel="noreferrer">Vista antigua</a>
+      <a class="link" href="/legacy" target="_blank" rel="noreferrer">Vista antigua</a>
     </div>
   </header>
 
@@ -56,16 +59,20 @@
 
       <section class="panel step-panel">
         <h2><span class="step-num">1</span> Fotos</h2>
-        <label class="dropzone" id="dropzone" for="import-files" title="PNG o SVG. Se apilan solas de mayor a menor.">
+        <label class="checkbox-row">
+          <input id="import-smoothing" type="checkbox" role="switch" checked disabled aria-describedby="import-smoothing-hint"/> Suavizar contornos PNG
+        </label>
+        <p id="import-smoothing-hint" class="hint">Desactívalo para conservar los escalones del pixel art. Se aplica a las próximas importaciones.</p>
+        <label class="dropzone" id="dropzone" for="import-files" title="El primer conjunto se apila automáticamente. Las siguientes importaciones conservan tu composición.">
           <input id="import-files" type="file" multiple accept=".png,.svg,image/png,image/svg+xml" disabled/>
           <span class="dz-icon">⤓</span>
           <span class="dz-title">Arrastra PNG / SVG aquí</span>
-          <span class="dz-sub">o haz clic para elegir · se apilan y encajan solas</span>
+          <span class="dz-sub">o haz clic para elegir · También puedes soltar un .silhouettes para abrirlo</span>
         </label>
         <div id="layer-tree" class="layer-tree" aria-live="polite">
           <p class="empty-state">Sin capas.</p>
         </div>
-        <p class="hint">Arrastra una fila: por el <b>centro</b> de otra para meterla dentro, por su <b>borde</b> superior/inferior para ponerla al lado, o al <b>hueco vacío</b> de la lista para sacarla al nivel superior.</p>
+        <p class="hint">Selecciona una capa para organizarla con los controles de la lista. También puedes arrastrarla dentro de otra.</p>
       </section>
 
       <section class="panel step-panel">
@@ -92,15 +99,15 @@
           <input id="rotate-solo" type="checkbox" disabled/> Transformar solo esta capa (los hijos no la siguen)
         </label>
         <div class="button-row">
-          <button type="button" id="matrioska-stack" class="btn-secondary" disabled title="Re-anida de mayor a menor y vuelve a encajar todo">Re-apilar todo</button>
-          <button type="button" id="fit-best" class="btn-secondary" disabled title="Busca la mejor posición y escala de la capa seleccionada">Mejor posición</button>
+          <button type="button" id="matrioska-stack" class="btn-secondary" disabled title="Ajusta toda la cadena. Conserva el orden de las capas ya anidadas.">Re-apilar todo</button>
+          <button type="button" id="fit-best" class="btn-secondary" disabled title="Busca la mejor posición y escala de la capa seleccionada">Encajar selección</button>
         </div>
-        <div id="fit-status" class="fit-status" aria-live="polite"></div>
+        <div id="fit-status" class="fit-status" role="status" aria-live="polite"></div>
       </section>
 
       <section class="panel step-panel">
         <h2><span class="step-num">3</span> Exportar</h2>
-        <button type="button" id="export-batch" class="btn-primary btn-big" disabled title="Sólida anidada, inversa anidada, sólida fit lienzo, inversa fit lienzo + marco">Generar 4 STL</button>
+        <button type="button" id="export-batch" class="btn-primary btn-big" disabled title="Sólida anidada, inversa anidada, sólida fit lienzo, inversa fit lienzo + marco">Exportar STL</button>
         <div class="export-options">
           <label class="checkbox-row"><input id="export-fmt-svg" type="checkbox" disabled/> + SVG</label>
           <label class="checkbox-row"><input id="export-fmt-png" type="checkbox" disabled/> + PNG</label>
@@ -118,7 +125,8 @@
     </aside>
 
     <section class="editor-center" aria-label="Editor 2D">
-      <svg id="editor-svg" viewBox="0 0 200 200" preserveAspectRatio="xMidYMid meet" role="img">
+      <div class="canvas-tools"><button type="button" id="view-fit" class="btn-ghost">Centrar vista</button><span>Rueda: zoom · Espacio + arrastrar: mover vista</span></div>
+      <svg id="editor-svg" viewBox="0 0 200 200" preserveAspectRatio="xMidYMid meet" role="img" aria-label="Composición de siluetas">
         <defs id="editor-defs"></defs>
         <g id="canvas-guides"></g>
         <g id="layer-content"></g>
@@ -150,6 +158,6 @@
 
   <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/build/three.min.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/controls/OrbitControls.js"></script>
-  <script type="module" src="/static/editor/editor.js?v=20260918j"></script>
+  <script type="module" src="/static/editor/editor.js?v=20260921-pixel"></script>
 </body>
 </html>

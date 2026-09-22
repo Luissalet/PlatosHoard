@@ -29,14 +29,25 @@ from __future__ import annotations
 
 import logging
 import multiprocessing as mp
+import threading
 import time
 import uuid
 from dataclasses import dataclass, field
 from enum import Enum
+from functools import wraps
 from pathlib import Path
 from typing import Any, Dict, Optional
 
 log = logging.getLogger("silhouettes.editor.jobs")
+
+
+def _locked(method):
+    """Serialize scheduler state transitions across Flask request threads."""
+    @wraps(method)
+    def wrapper(self, *args, **kwargs):
+        with self._lock:
+            return method(self, *args, **kwargs)
+    return wrapper
 
 
 # ---------------------------------------------------------------------------
@@ -271,6 +282,7 @@ class JobScheduler:
     """
 
     def __init__(self, output_dir: Optional[Path] = None) -> None:
+        self._lock = threading.RLock()
         self._output_dir = Path(output_dir) if output_dir else None
         self._jobs: Dict[str, JobRecord] = {}
         self._ctx = mp.get_context("spawn")
@@ -279,6 +291,8 @@ class JobScheduler:
         self._cancel_event: mp.Event = self._ctx.Event()
         self._pool: Optional[mp.Pool] = None
         self._futures: Dict[str, Any] = {}  # job_id → pool AsyncResult
+        self._pending_payloads: Dict[str, Dict[str, Any]] = {}
+        self._active_job_id: Optional[str] = None
 
     @property
     def output_dir(self) -> Optional[Path]:
@@ -286,6 +300,7 @@ class JobScheduler:
 
     # -- lifecycle ----------------------------------------------------------
 
+    @_locked
     def _ensure_pool(self) -> None:
         if self._pool is None:
             # Reset the event before starting a new pool (fresh state)
@@ -297,6 +312,7 @@ class JobScheduler:
             )
             log.info("job pool started (spawn, 1 worker)")
 
+    @_locked
     def shutdown(self, wait: bool = True) -> None:
         """Shut down the pool.  In-flight jobs are marked ``failed``."""
         if self._pool is not None:
@@ -312,10 +328,13 @@ class JobScheduler:
             self._pool.terminate()
             self._pool.join()
             self._pool = None
+            self._active_job_id = None
+            self._pending_payloads.clear()
             log.info("job pool shut down")
 
     # -- submit -------------------------------------------------------------
 
+    @_locked
     def submit(
         self,
         job_type: str,
@@ -325,7 +344,7 @@ class JobScheduler:
         layer_id: Optional[str] = None,
         request_seq: Optional[int] = None,
     ) -> JobRecord:
-        """Submit a job.  Returns the ``JobRecord`` (state=queued).
+        """Submit a job.  The first job starts; later jobs remain queued.
 
         The caller is responsible for serializing any geometry to WKB
         before putting it in ``payload``.  No Flask/request objects may
@@ -341,22 +360,35 @@ class JobScheduler:
             request_seq=request_seq,
         )
         self._jobs[job_id] = rec
+        self._pending_payloads[job_id] = dict(payload)
 
-        # Ensure the cancel event is clear before starting a new job
+        self._dispatch_next()
+        return rec
+
+    @_locked
+    def _dispatch_next(self) -> None:
+        """Dispatch the oldest queued job; never place two jobs in the pool queue."""
+        if self._active_job_id is not None:
+            return
+        next_id = next((jid for jid in self._jobs
+                        if jid in self._pending_payloads
+                        and self._jobs[jid].state == JobState.QUEUED), None)
+        if next_id is None:
+            return
+        payload = self._pending_payloads.pop(next_id)
         self._cancel_event.clear()
-
         self._ensure_pool()
         assert self._pool is not None
-        # payload must be a plain dict – no Events, no Flask objects
-        async_result = self._pool.apply_async(worker_main, args=(dict(payload),))
-        self._futures[job_id] = async_result
-
-        # Initial poll (non-blocking)
-        self._poll_job(job_id)
-        return rec
+        rec = self._jobs[next_id]
+        rec.state = JobState.RUNNING
+        rec.phase = "running"
+        rec.started_at = time.time()
+        self._active_job_id = next_id
+        self._futures[next_id] = self._pool.apply_async(worker_main, args=(payload,))
 
     # -- polling (called from API thread) -----------------------------------
 
+    @_locked
     def _poll_job(self, job_id: str) -> None:
         """Check the async result and update the record if terminal."""
         future = self._futures.get(job_id)
@@ -375,36 +407,42 @@ class JobScheduler:
                 rec.state = JobState.FAILED
                 rec.error = {"code": "WORKER_EXCEPTION", "message": str(exc)}
                 log.exception("job %s failed", job_id)
-                return
-
-            if result.get("cancelled"):
-                rec.state = JobState.CANCELLED
-                rec.result = result
-            elif result.get("error"):
-                rec.state = JobState.FAILED
-                rec.error = result["error"]
-                rec.result = result
             else:
-                rec.state = JobState.COMPLETED
-                rec.result = result
-                rec.progress = 1.0
-                rec.phase = "completed"
-                dl = result.get("download_path")
-                if dl:
-                    rec.download_path = str(dl)
+                if result.get("cancelled"):
+                    rec.state = JobState.CANCELLED
+                    rec.result = result
+                elif result.get("error"):
+                    rec.state = JobState.FAILED
+                    rec.error = result["error"]
+                    rec.result = result
+                else:
+                    rec.state = JobState.COMPLETED
+                    rec.result = result
+                    rec.progress = 1.0
+                    rec.phase = "completed"
+                    dl = result.get("download_path")
+                    if dl:
+                        rec.download_path = str(dl)
+            self._futures.pop(job_id, None)
+            if self._active_job_id == job_id:
+                self._active_job_id = None
+            self._dispatch_next()
 
+    @_locked
     def _poll_all(self) -> None:
-        for job_id in list(self._futures.keys()):
-            self._poll_job(job_id)
+        if self._active_job_id is not None:
+            self._poll_job(self._active_job_id)
 
     # -- query --------------------------------------------------------------
 
+    @_locked
     def get(self, job_id: str) -> Optional[JobRecord]:
         rec = self._jobs.get(job_id)
         if rec is not None:
-            self._poll_job(job_id)
+            self._poll_all()
         return self._jobs.get(job_id)
 
+    @_locked
     def list_jobs(self, document_id: Optional[str] = None) -> list:
         self._poll_all()
         jobs = list(self._jobs.values())
@@ -415,6 +453,7 @@ class JobScheduler:
 
     # -- cancel -------------------------------------------------------------
 
+    @_locked
     def cancel(self, job_id: str) -> bool:
         """Request cooperative cancellation.
 
@@ -427,12 +466,22 @@ class JobScheduler:
             return False
         if rec.state in TERMINAL_STATES:
             return False
-        self._cancel_event.set()
+        if job_id == self._active_job_id:
+            self._cancel_event.set()
+        else:
+            # Queued work has not been submitted to the process pool yet, so
+            # it can be cancelled without touching the running job.
+            self._pending_payloads.pop(job_id, None)
+            rec.state = JobState.CANCELLED
+            rec.phase = "cancelled"
+            rec.finished_at = time.time()
+            rec.result = {"cancelled": True, "queued": True}
         log.info("cancel requested for job %s", job_id)
         return True
 
     # -- download -----------------------------------------------------------
 
+    @_locked
     def download_path(self, job_id: str) -> Optional[Path]:
         """Return the safe download path for a completed job, or ``None``.
 
@@ -442,7 +491,7 @@ class JobScheduler:
         rec = self._jobs.get(job_id)
         if rec is None:
             return None
-        self._poll_job(job_id)
+        self._poll_all()
         rec = self._jobs.get(job_id)
         if rec is None or rec.state != JobState.COMPLETED:
             return None

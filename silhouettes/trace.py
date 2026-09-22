@@ -22,6 +22,7 @@ class TraceSettings:
 
 
 PRESETS = {
+    "pixel": TraceSettings(mode="none", simplify=0.0),
     "exact": TraceSettings(
         simplify=0.1, path_precision=5, corner_threshold=90,
         length_threshold=4.0, splice_threshold=45,

@@ -25,11 +25,13 @@ import hashlib
 import io
 import json
 import logging
+import re
 import uuid
 from pathlib import Path
 from typing import Any, Optional
 
 from flask import Blueprint, Flask, current_app, jsonify, request, send_file
+from shapely.ops import unary_union
 
 from .asset_adapter import AssetImportError, import_batch
 from .commands import CommandError
@@ -48,7 +50,26 @@ from .project_io import ProjectIOError, load_package, save_package
 from .transforms import (
     Pose, apply_flip_h, apply_pose, compose_pose, normalize_asset, reparent_pose, world_pose,
 )
-from shapely.ops import unary_union
+
+
+def _natural_name_key(filename: str) -> tuple:
+    """National-number prefix first, then natural case-insensitive name.
+
+    With descending sorting this produces 0823 > 0822 > 0821. Files without
+    a numeric prefix fall back to natural Z-A ordering. The original filename
+    is the final deterministic tie-breaker.
+    """
+    stem = Path(filename or "").stem.casefold()
+    parts = tuple(
+        (1, int(part), len(part)) if part.isdigit() else (0, part)
+        for part in re.split(r"(\d+)", stem)
+        if part
+    )
+    national = re.match(r"^(\d+)", stem)
+    if national:
+        prefix = national.group(1)
+        return 1, int(prefix), len(prefix), parts, stem, filename or ""
+    return 0, 0, 0, parts, stem, filename or ""
 
 log = logging.getLogger("silhouettes.editor.api")
 
@@ -385,6 +406,11 @@ def post_assets(doc_id: str) -> Any:
     store = _get_store()
     doc = _load_doc_or_404(doc_id)
 
+    smoothing_value = request.form.get("smoothing", "true")
+    if smoothing_value not in ("true", "false"):
+        return _error_payload("INVALID_STRUCTURE", "smoothing must be true or false", 400)
+    smoothing = smoothing_value == "true"
+
     base_revision = request.form.get("base_revision")
     if base_revision is not None:
         try:
@@ -401,7 +427,7 @@ def post_assets(doc_id: str) -> Any:
         return _error_payload("INVALID_STRUCTURE", "no valid files in upload", 400)
 
     try:
-        assets, errors = import_batch(file_list)
+        assets, errors = import_batch(file_list, smoothing=smoothing)
     except AssetImportError as exc:
         return _error_payload(exc.code, exc.message, 400)
 
@@ -409,6 +435,9 @@ def post_assets(doc_id: str) -> Any:
         return _error_payload("IMPORT_FAILED", "all files failed to import", 422,
                               details={"errors": errors})
 
+    # Establish only the new batch's initial tree order. Existing roots keep
+    # their order (including Marco), and later drag-and-drop remains manual.
+    assets.sort(key=lambda asset: _natural_name_key(asset.source_filename), reverse=True)
     asset_dicts = [a.to_document_asset() for a in assets]
     canvas = doc.get("canvas") or {}
     cw = float(canvas.get("width_mm") or 200)
@@ -465,6 +494,9 @@ def post_assets(doc_id: str) -> Any:
 
     # commit_command already returns {"document": ..., "revision": ...}.
     # Do NOT wrap it again — the client expects the bare document.
+    from .source_refresh import persist_assets
+    persist_assets(result['document'], {a.asset_id: a.source_bytes for a in assets},
+                   store.documents_dir.parent / 'assets')
     return jsonify({
         "document": result["document"],
         "revision": result["revision"],
@@ -524,7 +556,7 @@ def post_fit(doc_id: str) -> Any:
 
 
 def _constrain_pose_to_parent(doc: dict, layer_id: str, pose_local: Pose,
-                              padding_mm: float = 1.0) -> Pose:
+                              padding_mm: float = 1.0, *, fast: bool = False) -> Pose:
     """Return a parent-local pose whose SVG contour stays inside the parent.
 
     Uses Shapely ``covers`` on the exact polygonised SVG contours.  If the
@@ -551,6 +583,7 @@ def _constrain_pose_to_parent(doc: dict, layer_id: str, pose_local: Pose,
         angles_deg=[pose_world.angle_deg],
         max_evaluations=3000,
         seed=42,
+        fast=fast,
     )
     if fr.pose is None:
         fr = fit_inside(
@@ -559,6 +592,7 @@ def _constrain_pose_to_parent(doc: dict, layer_id: str, pose_local: Pose,
             angles_deg=[pose_world.angle_deg],
             max_evaluations=8000,
             seed=42,
+            fast=fast,
         )
     if fr.pose is None:
         raise FittingError(fr.status, f"constrain: child contour crosses parent ({fr.status})")
@@ -587,7 +621,10 @@ def post_constrain(doc_id: str) -> Any:
         if pose.scale <= 0:
             raise ValueError("scale must be > 0")
         padding = float(body.get("padding_mm", 1.0))
-        out = _constrain_pose_to_parent(doc, layer_id, pose, padding_mm=padding)
+        out = _constrain_pose_to_parent(
+            doc, layer_id, pose, padding_mm=padding,
+            fast=body.get("quality") == "preview",
+        )
     except FittingError as exc:
         return _error_payload(exc.code if hasattr(exc, "code") else "CONSTRAIN_FAILED",
                               str(exc), 422)
@@ -831,7 +868,10 @@ def post_exports(doc_id: str) -> Any:
     layer_ids = body.get("layer_ids", list(doc["layers"].keys()))
     families = body.get("families", ["normal_registered", "inverse_registered", "normal_fullframe", "inverse_fullframe"])
     formats = body.get("formats", ["svg", "png", "stl"])
-    png_width = int(body.get("png_width_px", 1000))
+    try:
+        png_width = int(body.get("png_width_px", 1000))
+    except (TypeError, ValueError):
+        return _error_payload("INVALID_RESOLUTION", "png_width_px must be an integer", 400)
     request_seq = body.get("request_seq")
 
     canvas = doc["canvas"]
@@ -995,6 +1035,12 @@ def import_package() -> Any:
     finally:
         tmp_path.unlink(missing_ok=True)
 
+    from .source_refresh import source_paths, refresh_sources, persist_assets
+    paths, configured = source_paths(doc, store.documents_dir.parent / 'source-collections.json')
+    updated, warnings = refresh_sources(doc, assets_bytes, paths) if configured else ([], [])
+    validate_document(doc)
+    persist_assets(doc, assets_bytes, store.documents_dir.parent / 'assets')
+
     # Assign a new document id (never reuse the old one)
     new_id = f"doc_{uuid.uuid4().hex[:12]}"
     doc["id"] = new_id
@@ -1015,7 +1061,10 @@ def import_package() -> Any:
     except Exception as exc:
         return _error_payload("IMPORT_FAILED", str(exc), 500)
 
-    return jsonify(doc), 201
+    response = jsonify(doc)
+    response.headers['X-Plato-Images-Updated'] = str(len(updated))
+    response.headers['X-Plato-Images-Warnings'] = json.dumps(warnings, ensure_ascii=True)
+    return response, 201
 
 
 # ---------------------------------------------------------------------------

@@ -1,5 +1,8 @@
 """Extrude valid filled polygons with Earcut; never delete holes or smooth."""
 import math
+import logging
+import numpy as np
+from shapely import constrained_delaunay_triangles
 import trimesh
 from shapely.geometry import Polygon, MultiPolygon
 from shapely.geometry.polygon import orient
@@ -14,9 +17,23 @@ def _extrude_one(poly, thickness, index):
     poly = orient(poly, sign=1.0)
     try:
         mesh = trimesh.creation.extrude_polygon(poly, height=thickness, engine="earcut")
-    except Exception as exc:
-        raise ValueError(f"Earcut extrusion failed for polygon #{index}: {exc}") from exc
-    validate_mesh(mesh, [poly], thickness)
+        validate_mesh(mesh, [poly], thickness)
+    except Exception as earcut_error:
+        # Collinear bridges between holes can leave a T-junction in Earcut's
+        # triangles despite a valid polygon. Re-triangulate the SAME boundary,
+        # without buffering, smoothing or changing the source/project geometry.
+        try:
+            triangles = constrained_delaunay_triangles(poly)
+            coords = np.asarray([list(t.exterior.coords)[:3] for t in triangles.geoms], dtype=float)
+            vertices, inverse = np.unique(coords.reshape(-1, 2), axis=0, return_inverse=True)
+            mesh = trimesh.creation.extrude_triangulation(vertices, inverse.reshape(-1, 3), height=thickness)
+            validate_mesh(mesh, [poly], thickness)
+        except Exception as fallback_error:
+            raise ValueError(
+                f"Extrusion failed for polygon #{index}: Earcut: {earcut_error}; "
+                f"constrained triangulation: {fallback_error}"
+            ) from fallback_error
+        logging.getLogger(__name__).info("Used constrained triangulation for polygon #%s: %s", index, earcut_error)
     return mesh
 
 

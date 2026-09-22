@@ -14,6 +14,12 @@ import { Interactions2D } from './interactions2d.js';
 import { ExportDialog } from './export_dialog.js';
 import { mountViewer3D } from './viewer3d.mjs';
 import * as affine from './affine.mjs';
+import { arrangementOrder, mountImportedNameChain } from './arrangement.mjs';
+import { constrainDescendants, fitNestedPose } from './hierarchy_fit.mjs';
+import { ProjectFiles, droppedProject } from './project_file.mjs';
+import { createPlatoPreview } from './plato_preview.mjs';
+
+const projectFiles = new ProjectFiles();
 
 function $(id) { return document.getElementById(id); }
 
@@ -42,7 +48,7 @@ function matrioskaLayers() {
 
 let _matrioskaBusy = false;
 
-const TOOLBAR_IDS = ['editor-new', 'editor-save', 'editor-open', 'editor-undo', 'editor-redo', 'import-files'];
+const TOOLBAR_IDS = ['editor-new', 'editor-save', 'editor-save-as', 'editor-preview', 'editor-open', 'editor-undo', 'editor-redo', 'import-files', 'import-smoothing'];
 const CANVAS_IDS = ['canvas-width-mm', 'canvas-height-mm', 'canvas-padding-top',
                     'canvas-padding-right', 'canvas-padding-bottom', 'canvas-padding-left'];
 const PANEL_IDS = ['recipe-select', 'export-selected', 'export-batch', 'export-fmt-svg', 'export-fmt-png',
@@ -52,7 +58,37 @@ const PANEL_IDS = ['recipe-select', 'export-selected', 'export-batch', 'export-f
 function enableToolbar(hasDoc) {
   for (const id of [...TOOLBAR_IDS, ...CANVAS_IDS, ...PANEL_IDS]) {
     const el = $(id);
-    if (el) el.disabled = !hasDoc;
+    if (el) el.disabled = !hasDoc || !!store.operationBusy;
+  }
+  if ($('editor-undo')) $('editor-undo').disabled ||= !store.canUndo();
+  if ($('editor-redo')) $('editor-redo').disabled ||= !store.canRedo();
+  const selected = store.layerById(store.selectedId);
+  if ($('fit-best')) $('fit-best').disabled ||= !selected || selected.locked || isMarcoLayer(selected);
+  if ($('export-selected')) $('export-selected').disabled ||= !selected || !!exportDialog?._busy || !exportDialog?._isExportable(store.selectedId);
+  for (const id of ['editor-new', 'editor-open']) if ($(id)) $(id).disabled = !!store.operationBusy || !!exportDialog?._busy;
+  if ($('export-batch')) $('export-batch').disabled ||= !!exportDialog?._busy;
+}
+
+/** One user action at a time; all its commands share one undo step. */
+async function runOperation(label, callback, { history = true } = {}) {
+  if (store.operationBusy || store.commandBusy) {
+    flash('Espera a que termine la acción actual.');
+    return;
+  }
+  store.operationBusy = true;
+  document.body.classList.add('operation-busy');
+  $('inspector')?.setAttribute('inert', '');
+  enableToolbar(!!store.doc);
+  flash(label);
+  try {
+    return await (history ? store.withHistoryGroup(callback) : callback());
+  } catch (err) {
+    flash(err.name === 'AbortError' ? 'Acción cancelada.' : `No se pudo completar: ${err.message}.${history ? ' Puedes deshacer los cambios aplicados.' : ''}`);
+  } finally {
+    store.operationBusy = false;
+    document.body.classList.remove('operation-busy');
+    $('inspector')?.removeAttribute('inert');
+    refreshAll();
   }
 }
 
@@ -95,7 +131,7 @@ async function applyCanvas() {
 
 function flash(msg) {
   const el = $('fit-status');
-  if (el) { el.textContent = msg; setTimeout(() => { if (el.textContent === msg) el.textContent = ''; }, 4000); }
+  if (el) el.textContent = msg;
 }
 
 // ---------------------------------------------------------------------------
@@ -103,10 +139,18 @@ function flash(msg) {
 // ---------------------------------------------------------------------------
 
 async function importFileList(files) {
+  return runOperation('Importando siluetas…', () => importFileListImpl(files));
+}
+
+async function importFileListImpl(files) {
   if (!files.length || !store.doc) return;
+  const previousIds = new Set(Object.keys(store.doc.layers || {}));
+  const hadSilhouettes = matrioskaLayers().length > 0;
+  const before = store._snapshot();
   const fd = new FormData();
   for (const f of files) fd.append('files[]', f, f.name);
   fd.append('base_revision', String(store.revision));
+  fd.append('smoothing', String($('import-smoothing')?.checked ?? true));
   flash(`Importando ${files.length} archivo(s)…`);
   try {
     const res = await fetch(`${store.baseUrl}/documents/${encodeURIComponent(store.doc.id)}/assets`, {
@@ -118,14 +162,18 @@ async function importFileList(files) {
       throw new Error(body?.error?.message || `HTTP ${res.status}`);
     }
     const out = await res.json();
-    store._applyDocumentPayload(out);
+    store.applyExternalMutationPayload(out, before);
     if (!Object.keys(store.doc?.layers || {}).length && store.doc?.id) {
       await store.loadDocument(store.doc.id);
     }
     refreshAll();
     viewport.applyViewport();
     viewport.fitToCanvas();
-    await autoArrange();
+    const importedLayers = matrioskaLayers().filter(l => !previousIds.has(l.id));
+    await autoArrange(importedLayers);
+    flash(hadSilhouettes
+      ? 'Lote añadido y ordenado por número. La composición anterior se conserva.'
+      : `${importedLayers.length} siluetas listas. Puedes ajustar la composición o exportar los STL.`);
   } catch (err) {
     flash(`Importación fallida: ${err.message}`);
   }
@@ -137,47 +185,56 @@ async function importFiles(input) {
   await importFileList(files);
 }
 
-/**
- * Everything the user would otherwise click: ≥2 silhouettes → stack
- * matrioska (largest outside); 1 → fit to canvas.  The marco always exists.
- */
-async function autoArrange() {
-  const layers = matrioskaLayers();
-  if (layers.length >= 2) {
-    await stackMatrioska();
-  } else {
-    await applyFitToCanvasAll({ silent: true });
+/** Arrange only the files from this import: national number descending. */
+async function autoArrange(layers) {
+  if (!layers.length) return;
+  const ordered = await mountImportedNameChain(layers, (layerId, parentId) =>
+    store.commitCommand('set_parent', { layer_id: layerId, new_parent_id: parentId }));
+  const root = store.layerById(ordered[0].id);
+  const rootPose = await fitRootPose(root);
+  await store.commitCommand('set_pose', { layer_id: root.id, pose: rootPose });
+  const padding = matrioskaPaddingMm();
+  for (let i = 1; i < ordered.length; i++) {
+    const layer = store.layerById(ordered[i].id);
+    const fit = { ...(layer.fit || {}), padding_mm: padding, target: 'parent_shape' };
+    await store.commitCommand('set_layer_properties', { layer_id: layer.id, fit });
+    const live = store.layerById(layer.id);
+    const pose = await fitChildIntoParentPose(live.id, live.parent_id);
+    await store.commitCommand('set_pose', { layer_id: live.id, pose: cleanPose(pose) });
   }
   await ensureMarco();
   refreshAll();
   requestAnimationFrame(() => viewport.fitToCanvas());
-  const n = layers.length;
-  flash(n ? `${n} silueta(s) listas. Pulsa «Generar 4 STL».` : 'Importó assets pero no hay capas.');
 }
 
-async function saveProject() {
+async function saveProject(saveAs = false) {
   if (!store.doc) return;
-  flash('Descargando proyecto…');
-  const res = await fetch(`${store.baseUrl}/documents/${encodeURIComponent(store.doc.id)}/package`);
-  if (!res.ok) { flash('No se pudo guardar.'); return; }
-  const blob = await res.blob();
-  const url = URL.createObjectURL(blob);
-  const a = document.createElement('a');
-  a.href = url;
-  a.download = `${store.doc.name || store.doc.id}.silhouettes`;
-  document.body.appendChild(a);
-  a.click();
-  a.remove();
-  URL.revokeObjectURL(url);
-  flash('Proyecto guardado.');
+  const doc = store.doc;
+  const result = await projectFiles.save(doc, async () => {
+    const res = await fetch(`${store.baseUrl}/documents/${encodeURIComponent(doc.id)}/package`);
+    if (!res.ok) throw new Error('No se pudo preparar el proyecto para guardar');
+    return res.blob();
+  }, { saveAs, getPreviewBlob: () => createPlatoPreview(doc, { baseUrl: store.baseUrl }) });
+  flash(result.downloaded
+    ? 'Descarga iniciada. Este navegador no permite actualizar directamente el archivo original.'
+    : result.previewSaved
+      ? `Guardado: ${result.name} · vista-plato.png actualizada.`
+      : `Proyecto guardado: ${result.name}. Vista pendiente: ${result.previewError}`);
 }
 
-async function openProject(input) {
-  const f = input.files?.[0];
-  if (!f) return;
+async function saveProjectPreview() {
+  if (!store.doc) return;
+  const doc = store.doc;
+  await projectFiles.savePreview(doc, () => createPlatoPreview(doc, { baseUrl: store.baseUrl }));
+  flash('vista-plato.png actualizada en la carpeta del proyecto.');
+}
+
+async function openProject(selected = null) {
+  selected ||= await projectFiles.pickOpen();
+  if (!selected) { flash('Apertura cancelada.'); return; }
+  const { file: f, handle } = selected;
   const fd = new FormData();
   fd.append('file', f, f.name);
-  input.value = '';
   flash('Abriendo proyecto…');
   try {
     const res = await fetch(`${store.baseUrl}/documents/import`, { method: 'POST', body: fd });
@@ -186,11 +243,16 @@ async function openProject(input) {
       throw new Error(body?.error?.message || `HTTP ${res.status}`);
     }
     store._applyDocumentPayload(await res.json());
+    await projectFiles.bind(store.doc.id, handle, f.name);
+    store.resetHistory();
     store.selectedId = null;
     await ensureMarco();
     refreshAll();
     requestAnimationFrame(() => viewport.fitToCanvas());
-    flash('Proyecto abierto.');
+    const updated = Number(res.headers.get('X-Plato-Images-Updated') || 0);
+    const warnings = JSON.parse(res.headers.get('X-Plato-Images-Warnings') || '[]');
+    flash(`Proyecto abierto: ${f.name}` + (updated ? ` · ${updated} PNG actualizados desde los originales.` : '')
+      + (warnings.length ? ` · ${warnings.join(' ')}` : ''));
   } catch (err) {
     flash(`No se pudo abrir: ${err.message}`);
   }
@@ -204,7 +266,7 @@ async function runFit() {
   if (!store.selectedId) { flash('Selecciona una capa primero.'); return; }
   const node = store.layerById(store.selectedId);
   if (!node) return;
-  if (isMarcoLayer(node)) { flash('El marco se redimensiona solo.'); return; }
+  if (node.locked || isMarcoLayer(node)) { flash('Selecciona una silueta desbloqueada.'); return; }
   flash('Buscando mejor posición…');
   try {
     if (node.parent_id) {
@@ -218,8 +280,7 @@ async function runFit() {
         });
       }
     }
-    // Descendants must follow a resized parent.
-    await applyMatrioskaFitAll({ silent: true, rootId: node.id });
+    // Children already inherit the parent transform; keep their arrangement.
     refreshAll();
     flash('Posición aplicada.');
   } catch (err) {
@@ -227,7 +288,7 @@ async function runFit() {
   }
 }
 
-/** A layer dragged out to the top level: fill the sheet, then re-fit its own children. */
+/** Fill the sheet, preserving the arrangement inside the moved subtree. */
 async function unnestAndFit(layerId) {
   const node = store.layerById(layerId);
   if (!node || node.parent_id) return;
@@ -241,12 +302,10 @@ async function unnestAndFit(layerId) {
         base_revision: store.revision,
       });
     }
-    await applyMatrioskaFitAll({ silent: true, rootId: layerId });
-    refreshAll();
+    await constrainDescendants(store, layerId, matrioskaPaddingMm());
     flash('Capa movida al nivel superior y ajustada al lienzo.');
   } catch (err) {
     flash(`No se pudo ajustar: ${err.message}`);
-    refreshAll();
   }
 }
 
@@ -254,18 +313,16 @@ async function nestAndFit(childId, parentId) {
   store.select(childId);
   flash('Encaje matrioska…');
   try {
-    const pose = await fitChildIntoParentPose(childId, parentId);
+    const pose = await fitChildIntoParentPose(childId, parentId, { quality: 'preview' });
     if (!pose) throw new Error('sin pose');
     await store.commitCommand('set_pose', {
       layer_id: childId,
       pose: cleanPose(pose),
     });
-    await applyMatrioskaFitAll({ silent: true, rootId: childId });
-    refreshAll();
+    await constrainDescendants(store, childId, matrioskaPaddingMm());
     flash('Encajado en la silueta padre.');
   } catch (err) {
     flash(`Matrioska: ${err.message}`);
-    refreshAll();
   }
 }
 
@@ -279,43 +336,8 @@ export function matrioskaPaddingMm() {
  * Fit child inside parent using exact SVG contours (server Shapely covers).
  * Trust the server pose — client AABB/Path2D clamp can corrupt a valid fit.
  */
-async function fitChildIntoParentPose(childId, _parentId) {
-  const child = store.layerById(childId);
-  if (!child?.parent_id) return null;
-
-  const wanted = matrioskaPaddingMm();
-  const attempts = [{ padding_mm: wanted }];
-  if (wanted > 0.5) attempts.push({ padding_mm: wanted * 0.5 });
-  if (wanted > 0) attempts.push({ padding_mm: 0 });
-
-  let lastErr = 'no feasible';
-  for (const opts of attempts) {
-    const res = await fetch(`${store.baseUrl}/documents/${encodeURIComponent(store.doc.id)}/fit`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        layer_id: childId,
-        target: 'parent_shape',
-        mode: 'best',
-        padding_mm: opts.padding_mm,
-        angles_deg: [Number(child.pose?.angle_deg) || 0],
-        max_evaluations: 6000,
-        seed: 42,
-        request_seq: Date.now(),
-      }),
-    });
-    const body = await res.json().catch(() => ({}));
-    if (res.ok) {
-      const pose = body.pose_local || body.pose;
-      if (pose && Number.isFinite(pose.scale) && pose.scale > 0) {
-        return cleanPose(pose);
-      }
-      lastErr = 'respuesta sin pose';
-    } else {
-      lastErr = body?.error?.message || `HTTP ${res.status}`;
-    }
-  }
-  throw new Error(lastErr);
+async function fitChildIntoParentPose(childId, _parentId, options = {}) {
+  return fitNestedPose(store, childId, matrioskaPaddingMm(), options);
 }
 
 function layerArea(layer) {
@@ -324,10 +346,15 @@ function layerArea(layer) {
   if (!lb) return 0;
   const w = Math.max(0, lb[2] - lb[0]);
   const h = Math.max(0, lb[3] - lb[1]);
-  // Intrinsic (unscaled) size: the biggest photo goes outermost.  The pose
-  // scale is ignored on purpose — every root is fitted to the canvas on
-  // import, which would make all footprints look alike.
-  return w * h;
+  let scale = Number(layer.pose?.scale) || 1;
+  let parent = store.layerById(layer.parent_id);
+  const seen = new Set([layer.id]);
+  while (parent && !seen.has(parent.id)) {
+    seen.add(parent.id);
+    scale *= Number(parent.pose?.scale) || 1;
+    parent = store.layerById(parent.parent_id);
+  }
+  return w * h * scale * scale;
 }
 
 function layerDepth(layerId) {
@@ -365,8 +392,9 @@ function nestedLayersTopDown(rootId = null) {
  * Detach first so a wrong existing tree (siblings, inverted) is rebuilt.
  */
 async function remountMatrioskaChain(layers) {
-  const ordered = [...layers].sort((a, b) => layerArea(b) - layerArea(a));
+  const ordered = arrangementOrder(layers, layerArea);
   if (ordered.length < 2) return ordered;
+  if (ordered.every((layer, i) => (layer.parent_id || null) === (ordered[i - 1]?.id || null))) return ordered;
 
   for (const layer of [...ordered].reverse()) {
     const live = store.layerById(layer.id);
@@ -393,31 +421,18 @@ async function remountMatrioskaChain(layers) {
  * and, once the layer is rotated, its bounding box is mostly empty space.
  */
 async function fitRootPose(layer) {
-  const asset = store.assetById(layer.asset_id);
-  const angle = Number(layer.pose?.angle_deg) || 0;
-  try {
-    const res = await fetch(`${store.baseUrl}/documents/${encodeURIComponent(store.doc.id)}/fit`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        layer_id: layer.id,
-        target: 'canvas',
-        mode: 'best',
-        padding_mm: 0,
-        angles_deg: [angle],
-        request_seq: Date.now(),
-      }),
-    });
-    const body = await res.json().catch(() => ({}));
-    const pose = body.pose_local || body.pose;
-    if (res.ok && pose && Number(pose.scale) > 0) return cleanPose(pose);
-  } catch (err) {
-    console.warn('server canvas fit failed, using client estimate', err);
+  const res = await fetch(`${store.baseUrl}/documents/${encodeURIComponent(store.doc.id)}/fit`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ layer_id: layer.id, target: 'canvas', mode: 'best',
+      padding_mm: 0, angles_deg: [Number(layer.pose?.angle_deg) || 0], request_seq: Date.now() }),
+  });
+  const body = await res.json().catch(() => ({}));
+  const pose = body.pose_local || body.pose;
+  if (!res.ok || !pose || !(Number(pose.scale) > 0)) {
+    throw new Error(body?.error?.message || 'No se pudo calcular el encaje exacto');
   }
-  if (!asset?.local_bounds || !store.doc?.canvas) return null;
-  const rect = affine.usableCanvasRect(store.doc.canvas);
-  return cleanPose(affine.fitPoseToRect(asset.local_bounds, rect, angle,
-                                        affine.sampleLocalOutline(asset, 400)));
+  return cleanPose(pose);
 }
 
 /** Fit canvas: max-scale every root into the usable sheet. */
@@ -440,7 +455,7 @@ async function applyFitToCanvasAll({ silent = false } = {}) {
       });
       n += 1;
     } catch (err) {
-      console.warn('fit canvas failed', layer.id, err);
+      throw new Error(`${layer.name || layer.id}: ${err.message}`);
     }
   }
   if (!silent) flash(n ? `Fit lienzo: ${n} capa(s) ajustada(s).` : 'Fit lienzo: nada que ajustar.');
@@ -456,7 +471,7 @@ async function applyMatrioskaFitAll({ silent = false, rootId = null } = {}) {
   const errors = [];
   for (const layer of nestedLayersTopDown(rootId)) {
     try {
-      const pose = await fitChildIntoParentPose(layer.id, layer.parent_id);
+      const pose = await fitChildIntoParentPose(layer.id, layer.parent_id, { mode: 'at_position', quality: 'preview' });
       if (!pose) continue;
       await store.commitCommand('set_pose', {
         layer_id: layer.id,
@@ -469,6 +484,7 @@ async function applyMatrioskaFitAll({ silent = false, rootId = null } = {}) {
       console.warn('matrioska fit failed', layer.id, err);
     }
   }
+  if (errors.length) throw new Error(errors.join('; '));
   if (!silent) {
     flash(n
       ? `Matrioska: ${n} hijo(s) encajado(s) por contorno.`
@@ -539,14 +555,14 @@ async function stackMatrioska() {
     }
 
     refreshAll();
+    if (errors.length) throw new Error(errors.join('; '));
     if (n) {
       flash(`Matrioska OK: ${n + 1} niveles — último hijo escala ${lastScale?.toFixed?.(2) ?? '?'}.`);
     } else {
       flash(`Matrioska: no cupo en el contorno${errors[0] ? ` — ${errors[0]}` : ''}.`);
     }
   } catch (err) {
-    flash(`Matrioska: ${err.message}`);
-    refreshAll();
+    throw err;
   } finally {
     _matrioskaBusy = false;
   }
@@ -614,9 +630,7 @@ let _marcoTimer = null;
 function scheduleMarcoRegen() {
   clearTimeout(_marcoTimer);
   _marcoTimer = setTimeout(async () => {
-    await ensureMarco({ force: true });
-    refreshAll();
-    requestAnimationFrame(() => viewport.fitToCanvas());
+    await runOperation('Actualizando marco…', () => ensureMarco({ force: true }));
     const { wallW, wallH, padding } = marcoParams();
     flash(`Marco: pared ${wallW} mm, altura ${wallH} mm, holgura ${padding} mm.`);
   }, 250);
@@ -733,11 +747,10 @@ function refreshAll() {
     tree.render();
     inspector.render(store.selectedId);
     exportDialog.updateCounter();
-    viewer3d?.update();
-    viewer3dInverse?.update();
   } catch (err) {
     console.error('refreshAll ui', err);
   }
+  try { if (store.doc?.id) localStorage.setItem('editor.lastDocument', store.doc.id); } catch { /* optional */ }
   window.dispatchEvent(new CustomEvent('editor:doc-changed'));
 }
 
@@ -753,16 +766,37 @@ async function boot() {
   store.matrioskaMode = true;
   store.viewMode = 'shell';
 
+  window.addEventListener('editor:selection', () => {
+    enableToolbar(!!store.doc);
+    tree?.render();
+  });
+  window.addEventListener('editor:export-state', () => enableToolbar(!!store.doc));
+  window.addEventListener('editor:operation-state', () => {
+    enableToolbar(!!store.doc);
+    document.body.classList.toggle('operation-busy', !!store.operationBusy);
+    if ($('inspector')) $('inspector').inert = !!store.operationBusy;
+  });
+  window.addEventListener('editor:doc-changed', () => { enableToolbar(!!store.doc); tree?.render(); inspector?.render(store.selectedId); exportDialog?.updateCounter(); });
   const svg = $('editor-svg');
   viewport = new Viewport2D(svg);
   tree = new LayerTree($('layer-tree'), viewport, {
     matrioska: () => true,
+    runOperation,
     onNest: (childId, parentId) => nestAndFit(childId, parentId),
     onUnnest: (layerId) => unnestAndFit(layerId),
   });
-  inspector = new Inspector($('inspector'), viewport);
+  inspector = new Inspector($('inspector'), viewport, {
+    runOperation,
+    onRefit: layerId => applyMatrioskaFitAll({ silent: true, rootId: layerId }),
+    onReparent: (layerId, parentId) => runOperation('Moviendo capa…', async () => {
+      await store.commitCommand('set_parent', { layer_id: layerId, new_parent_id: parentId });
+      if (parentId) await nestAndFit(layerId, parentId);
+      else await unnestAndFit(layerId);
+    }),
+  });
   interactions = new Interactions2D(viewport);
   exportDialog = new ExportDialog({
+    projectFiles,
     recipeSelect: $('recipe-select'),
     exportSelected: $('export-selected'),
     exportBatch: $('export-batch'),
@@ -778,7 +812,7 @@ async function boot() {
   viewer3dInverse = mountViewer3D($('viewer-3d-inverse'), { mode: 'inverse' });
 
   // Toolbar
-  $('editor-new').addEventListener('click', async () => {
+  $('editor-new').addEventListener('click', () => runOperation('Creando documento…', async () => {
     try {
       await store.createDocument('Nuevo documento');
       enableToolbar(true);
@@ -787,29 +821,30 @@ async function boot() {
       requestAnimationFrame(() => viewport.fitToCanvas());
       flash('Documento creado. Arrastra tus fotos.');
     } catch (err) { flash(err.message); }
-  });
-  $('editor-save').addEventListener('click', saveProject);
-  $('editor-open').addEventListener('click', () => {
-    const inp = document.createElement('input');
-    inp.type = 'file';
-    inp.accept = '.silhouettes';
-    inp.addEventListener('change', () => openProject(inp));
-    inp.click();
+  }, { history: false }));
+  $('editor-save').addEventListener('click', () => runOperation('Guardando proyecto…', saveProject, { history: false }));
+  $('editor-save-as').addEventListener('click', () => runOperation('Guardando proyecto como…', () => saveProject(true), { history: false }));
+  $('editor-preview').addEventListener('click', () => runOperation('Actualizando vista de Plato…', saveProjectPreview, { history: false }));
+  $('editor-open').addEventListener('click', () => runOperation('Abriendo proyecto…', openProject, { history: false }));
+  window.addEventListener('keydown', e => {
+    if (!(e.ctrlKey || e.metaKey) || e.altKey || e.key.toLowerCase() !== 's') return;
+    e.preventDefault();
+    if (!store.doc) return;
+    runOperation('Guardando proyecto…', () => saveProject(e.shiftKey), { history: false });
   });
   $('import-files').addEventListener('change', (e) => importFiles(e.target));
 
   // Drag-and-drop import anywhere on the editor.
-  const dropTarget = document.querySelector('.editor-main') || document.body;
-  const clearDropActive = () => { dropTarget.classList.remove('drop-active'); };
+  const dropTarget = document.body;
+  const dropHighlight = document.querySelector('.editor-main') || dropTarget;
+  const clearDropActive = () => { dropHighlight.classList.remove('drop-active'); };
   dropTarget.addEventListener('dragenter', (e) => {
-    if (!store.doc) return;
     const types = [...(e.dataTransfer?.types || [])];
     if (!types.includes('Files')) return;
     e.preventDefault();
-    dropTarget.classList.add('drop-active');
+    dropHighlight.classList.add('drop-active');
   });
   dropTarget.addEventListener('dragover', (e) => {
-    if (!store.doc) return;
     const types = [...(e.dataTransfer?.types || [])];
     if (!types.includes('Files')) return;
     e.preventDefault();
@@ -821,41 +856,48 @@ async function boot() {
   dropTarget.addEventListener('drop', async (e) => {
     e.preventDefault();
     clearDropActive();
+    try {
+      const project = droppedProject(e.dataTransfer);
+      if (project) {
+        if (exportDialog?._busy) { flash('Espera a que termine la exportación para abrir otro proyecto.'); return; }
+        await runOperation('Abriendo proyecto…', async () => openProject(await project), { history: false });
+        return;
+      }
+    } catch (error) { flash(error.message); return; }
     if (!store.doc) return;
     const files = [...(e.dataTransfer?.files || [])].filter((f) =>
       /\.(png|svg)$/i.test(f.name) || f.type === 'image/png' || f.type === 'image/svg+xml');
-    if (!files.length) { flash('Suelta archivos PNG o SVG.'); return; }
+    if (!files.length) { flash('Suelta un proyecto .silhouettes o imágenes PNG / SVG.'); return; }
     await importFileList(files);
   });
   window.addEventListener('dragend', clearDropActive);
   window.addEventListener('drop', clearDropActive);
   clearDropActive();
 
-  $('fit-best').addEventListener('click', runFit);
-  $('matrioska-stack')?.addEventListener('click', stackMatrioska);
-  for (const id of CANVAS_IDS) $(id).addEventListener('change', applyCanvas);
+  $('view-fit').addEventListener('click', () => viewport.fitToCanvas());
+  $('fit-best').addEventListener('click', () => runOperation('Buscando el mejor encaje…', runFit));
+  $('matrioska-stack')?.addEventListener('click', () => runOperation('Reorganizando todas las capas…', stackMatrioska));
+  for (const id of CANVAS_IDS) $(id).addEventListener('change', () => runOperation('Ajustando lienzo…', applyCanvas));
   for (const id of ['marco-wall-w', 'marco-wall-h', 'marco-padding']) {
     $(id)?.addEventListener('change', scheduleMarcoRegen);
   }
-  $('matrioska-padding-mm')?.addEventListener('change', async () => {
+  $('matrioska-padding-mm')?.addEventListener('change', () => runOperation('Aplicando holgura…', async () => {
     if (!store.doc) return;
     await applyMatrioskaFitAll({ silent: true });
-    refreshAll();
     flash(`Holgura ${matrioskaPaddingMm()} mm aplicada.`);
-  });
+  }));
   window.addEventListener('editor:refit-descendants', async (e) => {
     const lid = e.detail?.layerId;
     if (!lid || !store.doc) return;
-    await applyMatrioskaFitAll({ silent: true, rootId: lid });
-    refreshAll();
+    await runOperation('Ajustando al contorno reflejado…', () => applyMatrioskaFitAll({ silent: true, rootId: lid }));
   });
   $('recipe-select')?.addEventListener('change', () => exportDialog.updateCounter());
   for (const id of ['export-fmt-svg', 'export-fmt-png']) {
     $(id)?.addEventListener('change', () => exportDialog.updateCounter());
   }
 
-  const doUndo = () => store.undo().then(() => refreshAll()).catch((err) => flash(err.message));
-  const doRedo = () => store.redo().then(() => refreshAll()).catch((err) => flash(err.message));
+  const doUndo = () => runOperation('Deshaciendo…', async () => { await store.undo(); flash('Acción deshecha.'); }, { history: false });
+  const doRedo = () => runOperation('Rehaciendo…', async () => { await store.redo(); flash('Acción rehecha.'); }, { history: false });
   $('editor-undo')?.addEventListener('click', doUndo);
   $('editor-redo')?.addEventListener('click', doRedo);
 
@@ -863,7 +905,7 @@ async function boot() {
     const key0 = e.key.toLowerCase();
     if (!(e.ctrlKey || e.metaKey) || (key0 !== 'z' && key0 !== 'y')) return;
     const t = e.target;
-    if (t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' || t.isContentEditable)) return;
+    if (t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' || t.tagName === 'SELECT' || t.isContentEditable)) return;
     if (key0 === 'z' && !e.shiftKey) {
       e.preventDefault();
       doUndo();
@@ -876,8 +918,8 @@ async function boot() {
   window.addEventListener('keydown', (e) => {
     if (e.key !== 'Delete' && e.key !== 'Backspace') return;
     const t = e.target;
-    if (t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' || t.isContentEditable)) return;
-    if (!store.selectedId) return;
+    if (t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' || t.tagName === 'SELECT' || t.isContentEditable)) return;
+    if (!store.selectedId || store.operationBusy || store.commandBusy) return;
     e.preventDefault();
     tree._delete(store.selectedId);
   });
@@ -915,7 +957,7 @@ async function boot() {
         handle.removeEventListener('pointercancel', onUp);
         persist(side === 'left' ? 'editor.panelLeft' : 'editor.panelRight', side === 'left' ? leftW : rightW);
         requestAnimationFrame(() => {
-          viewport.fitToCanvas();
+          viewport.applyViewport();
           viewer3d?.resize?.();
           viewer3dInverse?.resize?.();
           updateViewers();
@@ -929,28 +971,8 @@ async function boot() {
   bindResizer(document.querySelector('.panel-resizer-left'), 'left');
   bindResizer(document.querySelector('.panel-resizer-right'), 'right');
 
-  // Selection from the viewport (click on a layer)
-  svg.addEventListener('click', (e) => {
-    const layerEl = e.target.closest?.('.layer');
-    if (layerEl) {
-      const lid = layerEl.dataset.layerId;
-      const node = store.layerById(lid);
-      if (node && viewport._isFrameLayer(node)) return;
-      store.select(lid);
-      tree.render();
-      inspector.render(store.selectedId);
-      viewport.renderSelection();
-      updateViewers();
-      return;
-    }
-    if (!e.target.closest?.('[data-handle]')) {
-      store.clearSelection();
-      tree.render();
-      inspector.render(null);
-      viewport.renderSelection();
-      updateViewers();
-    }
-  });
+  // Interactions2D owns canvas selection on pointerdown. A click after pointer
+  // capture can target the SVG root, so it must not clear that selection.
 
   // Restore the most recent document, else create one so the user can drop
   // photos straight away.
@@ -960,7 +982,12 @@ async function boot() {
       const list = await res.json();
       const docs = Array.isArray(list) ? list : list.documents || [];
       if (docs.length) {
-        await store.loadDocument(docs[docs.length - 1].id);
+        const requested = new URLSearchParams(location.search).get('document');
+        let lastId;
+        try { lastId = localStorage.getItem('editor.lastDocument'); } catch { /* optional */ }
+        const candidate = docs.find(d => d.id === requested) || docs.find(d => d.id === lastId) || docs[docs.length - 1];
+        await store.loadDocument(candidate.id);
+        await projectFiles.restore(store.doc.id);
         enableToolbar(true);
         await ensureMarco();
         refreshAll();

@@ -622,25 +622,37 @@ export function mountViewer3D(container, { mode = 'normal' } = {}) {
       if (tray) return tray;
     }
 
-    const paths = _svgPaths(asset);
-    if (!paths.length) return null;
-
-    const shapes = _shapesFromSvgPaths(paths);
-    if (!shapes.length) return null;
-
     const m = _layerWorldMatrix(layerId, asset);
     const canvasH = store.doc?.canvas?.height_mm ?? 200;
     const t = _extrusionOf(node);
     const z0 = _stackZ(layerId, viewMode);
 
+    const cacheKey = `${asset.id || node.asset_id}|${asset.geometry_hash || asset.canonical_svg}|${t}`;
+    let baseGeo = geometryCache.get(cacheKey);
     let geo;
     try {
-      geo = new THREE.ExtrudeGeometry(shapes, {
-        depth: t,
-        bevelEnabled: false,
-        steps: 1,
-        curveSegments: 24,
-      });
+      if (!baseGeo) {
+        const paths = _svgPaths(asset);
+        if (!paths.length) return null;
+        const shapes = _shapesFromSvgPaths(paths);
+        if (!shapes.length) return null;
+        baseGeo = new THREE.ExtrudeGeometry(shapes, {
+          depth: t,
+          bevelEnabled: false,
+          steps: 1,
+          curveSegments: 24,
+        });
+        geometryCache.set(cacheKey, baseGeo);
+        if (geometryCache.size > 64) {
+          const oldest = geometryCache.keys().next().value;
+          const stale = geometryCache.get(oldest);
+          stale?.dispose?.();
+          geometryCache.delete(oldest);
+        }
+      }
+      // Keep the cached geometry in source-local coordinates. Each instance
+      // receives its own clone before pose/flip/Y/Z transforms are applied.
+      geo = baseGeo.clone();
     } catch (err) {
       console.warn('extrude failed', layerId, err);
       return null;
@@ -863,10 +875,68 @@ export function mountViewer3D(container, { mode = 'normal' } = {}) {
   }
 
   let _inverseSeq = 0;
+  const geometryCache = new Map();
+  let disposed = false;
+  let updateRaf = null;
+  let updateQueued = false;
+  let rebuildQueued = false;
+  let lastBuiltDoc = null;
+  let lastBuiltRevision = null;
+  let inverseAbort = null;
+
+  function clearAssembly() {
+    while (assembly.children.length) {
+      const ch = assembly.children[0];
+      assembly.remove(ch);
+      ch.traverse?.((o) => {
+        o.geometry?.dispose?.();
+        if (Array.isArray(o.material)) o.material.forEach((m) => m.dispose?.());
+        else o.material?.dispose?.();
+      });
+      if (!ch.traverse) {
+        ch.geometry?.dispose?.();
+        ch.material?.dispose?.();
+      }
+    }
+  }
+
+  function setMeshLayer(mesh, layerId) {
+    if (mesh) mesh.userData.layerId = layerId;
+    return mesh;
+  }
+
+  function meshLayerId(mesh) {
+    if (mesh?.userData?.layerId) return mesh.userData.layerId;
+    const name = String(mesh?.name || '');
+    return name.replace(/^(?:inv|shell)-/, '') || null;
+  }
+
+  function applySelection() {
+    const selected = store.selectedId;
+    assembly.traverse((obj) => {
+      if (!obj.material) return;
+      const id = meshLayerId(obj);
+      const paint = (mat) => {
+        if (!mat) return;
+        if (id === selected) {
+          mat.emissive?.set?.(0x1d4ed8);
+          mat.emissiveIntensity = 0.25;
+        } else {
+          mat.emissive?.set?.(0x000000);
+          mat.emissiveIntensity = 0;
+        }
+      };
+      if (Array.isArray(obj.material)) obj.material.forEach(paint);
+      else paint(obj.material);
+    });
+  }
 
   async function _loadInverseFromServer(targets) {
     const seq = ++_inverseSeq;
     const rev = store.revision;
+    const docRef = store.doc;
+    inverseAbort?.abort?.();
+    inverseAbort = typeof AbortController !== 'undefined' ? new AbortController() : null;
     try {
       const res = await fetch(
         `${store.baseUrl}/documents/${encodeURIComponent(store.doc.id)}/mesh-rings`,
@@ -878,18 +948,14 @@ export function mountViewer3D(container, { mode = 'normal' } = {}) {
             layer_ids: targets,
             include_subtree: false,
           }),
+          signal: inverseAbort?.signal,
         },
       );
       const body = await res.json().catch(() => ({}));
       if (!res.ok) throw new Error(body?.error?.message || `HTTP ${res.status}`);
-      if (seq !== _inverseSeq || store.revision !== rev) return;
+      if (disposed || seq !== _inverseSeq || store.doc !== docRef || store.revision !== rev) return;
 
-      while (assembly.children.length) {
-        const ch = assembly.children[0];
-        assembly.remove(ch);
-        ch.geometry?.dispose?.();
-        ch.material?.dispose?.();
-      }
+      clearAssembly();
       syncSheetAndGrid();
 
       // Keep procedural Marco as a normal ring under/around inverse plates.
@@ -913,21 +979,16 @@ export function mountViewer3D(container, { mode = 'normal' } = {}) {
             mesh.material.emissive = new THREE.Color(0x1d4ed8);
             mesh.material.emissiveIntensity = 0.2;
           }
-          assembly.add(mesh);
+          assembly.add(setMeshLayer(mesh, layerId));
         }
       }
       frameStable();
     } catch (err) {
       console.warn('inverse mesh-rings failed, client fallback', err);
-      // Always rebuild client inverse for THIS request's targets, even if a
-      // newer request started — otherwise a 404 + race leaves the assembly empty.
-      if (store.revision !== rev) return;
-      while (assembly.children.length) {
-        const ch = assembly.children[0];
-        assembly.remove(ch);
-        ch.geometry?.dispose?.();
-        ch.material?.dispose?.();
-      }
+      // Only the current request may install the client fallback; stale
+      // failures must leave the newer assembly untouched.
+      if (disposed || seq !== _inverseSeq || store.doc !== docRef || store.revision !== rev) return;
+      clearAssembly();
       syncSheetAndGrid();
       for (const lid of Object.keys(store.doc?.layers || {})) {
         const n = store.layerById(lid);
@@ -937,28 +998,19 @@ export function mountViewer3D(container, { mode = 'normal' } = {}) {
       }
       for (const layerId of targets) {
         const mesh = buildInverseMesh(layerId);
-        if (mesh) assembly.add(mesh);
+        if (mesh) assembly.add(setMeshLayer(mesh, layerId));
       }
       frameStable();
     }
   }
 
-  function update() {
+  function rebuild() {
+    if (disposed) return;
     resize();
-    while (assembly.children.length) {
-      const ch = assembly.children[0];
-      assembly.remove(ch);
-      if (ch.traverse) {
-        ch.traverse((o) => {
-          o.geometry?.dispose?.();
-          if (Array.isArray(o.material)) o.material.forEach((m) => m.dispose?.());
-          else o.material?.dispose?.();
-        });
-      } else {
-        ch.geometry?.dispose?.();
-        ch.material?.dispose?.();
-      }
-    }
+    // Keep the last inverse preview visible while its updated cut-outs load.
+    // Clearing it on every pose change made the panel flash empty repeatedly.
+    const keepInverse = viewMode === 'inverse' && store.doc && lastBuiltDoc?.id === store.doc.id;
+    if (!keepInverse) clearAssembly();
     syncSheetAndGrid();
     if (!store.doc) { frameStable(); return; }
 
@@ -975,11 +1027,15 @@ export function mountViewer3D(container, { mode = 'normal' } = {}) {
         return n && _effectiveVisible(n) && _isFrameLayer(n);
       });
       // Add frame rings immediately; inverse plates load async.
-      for (const layerId of frameIds) {
-        const mesh = buildLayerMesh(layerId);
-        if (mesh) assembly.add(mesh);
+      if (!keepInverse) {
+        for (const layerId of frameIds) {
+          const mesh = buildLayerMesh(layerId);
+          if (mesh) assembly.add(setMeshLayer(mesh, layerId));
+        }
       }
       _loadInverseFromServer(invTargets);
+      lastBuiltDoc = store.doc;
+      lastBuiltRevision = store.revision;
       return;
     }
 
@@ -997,14 +1053,46 @@ export function mountViewer3D(container, { mode = 'normal' } = {}) {
         if (mesh.isGroup) mesh.traverse((o) => paint(o.material));
         else paint(mesh.material);
       }
-      assembly.add(mesh);
+      assembly.add(setMeshLayer(mesh, layerId));
     }
+    lastBuiltDoc = store.doc;
+    lastBuiltRevision = store.revision;
     frameStable();
   }
 
-  window.addEventListener('editor:pose-changed', update);
-  window.addEventListener('editor:selection', update);
-  window.addEventListener('editor:doc-changed', update);
+  function scheduleRebuild() {
+    rebuildQueued = true;
+    scheduleUpdate();
+  }
+  function flushUpdate() {
+    updateRaf = null;
+    updateQueued = false;
+    if (disposed) return;
+    if (rebuildQueued) {
+      rebuildQueued = false;
+      if (lastBuiltDoc !== store.doc || lastBuiltRevision !== store.revision) rebuild();
+      else applySelection();
+    } else {
+      applySelection();
+    }
+  }
+  function scheduleSelection() {
+    if (rebuildQueued) return;
+    updateQueued = true;
+    if (updateRaf) return;
+    updateRaf = requestAnimationFrame(flushUpdate);
+  }
+  function scheduleUpdate() {
+    if (updateRaf) return;
+    updateRaf = requestAnimationFrame(flushUpdate);
+  }
+
+  const onPoseChanged = () => scheduleRebuild();
+  const onSelection = () => scheduleSelection();
+  const onDocChanged = () => scheduleRebuild();
+  window.addEventListener('editor:pose-changed', onPoseChanged);
+  window.addEventListener('editor:selection', onSelection);
+  window.addEventListener('editor:doc-changed', onDocChanged);
 
   let raf = null;
   function loop() {
@@ -1014,15 +1102,26 @@ export function mountViewer3D(container, { mode = 'normal' } = {}) {
     renderer.render(scene, camera);
   }
   loop();
-  update();
+  scheduleRebuild();
 
   return {
-    update,
+    update: scheduleRebuild,
     resize,
     dispose() {
+      disposed = true;
+      ++_inverseSeq;
+      inverseAbort?.abort?.();
+      if (updateRaf) cancelAnimationFrame(updateRaf);
+      window.removeEventListener('editor:pose-changed', onPoseChanged);
+      window.removeEventListener('editor:selection', onSelection);
+      window.removeEventListener('editor:doc-changed', onDocChanged);
       cancelAnimationFrame(raf);
       window.removeEventListener('resize', resize);
       ro?.disconnect();
+      controls?.dispose?.();
+      clearAssembly();
+      for (const geo of geometryCache.values()) geo.dispose?.();
+      geometryCache.clear();
       renderer.dispose();
       container.innerHTML = '';
     },

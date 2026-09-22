@@ -37,13 +37,19 @@ export class LayerTree {
   /**
    * @param {HTMLElement} container
    * @param {object} viewport
-   * @param {{ matrioska?: () => boolean, onNest?: (childId: string, parentId: string) => void }} [opts]
+   * @param {{
+   *   matrioska?: () => boolean,
+   *   onNest?: (childId: string, parentId: string) => Promise<void>|void,
+   *   onUnnest?: (layerId: string) => Promise<void>|void,
+   *   runOperation?: (label: string, callback: () => Promise<unknown>) => Promise<unknown>
+   * }} [opts]
    */
   constructor(container, viewport, opts = {}) {
     this.el = container;
     this.viewport = viewport;
     this._dragId = null;
     this._opts = opts;
+    this._thumbnailCache = new Map();
   }
 
   render() {
@@ -52,6 +58,7 @@ export class LayerTree {
       this.el.innerHTML = '<p class="empty-state">Sin capas. Importa o suelta un PNG/SVG.</p>';
       return;
     }
+    this._appendSelectedControls();
     for (const root of store.roots()) {
       this._appendNode(root, 0);
     }
@@ -64,6 +71,76 @@ export class LayerTree {
     rootZone.textContent = 'Soltar aquí para sacar al nivel superior';
     this.el.appendChild(rootZone);
 
+  }
+
+  _appendSelectedControls() {
+    const selected = store.layerById(store.selectedId);
+    if (!selected) return;
+    const controls = document.createElement('div');
+    controls.className = 'tree-selection-controls';
+    controls.setAttribute('role', 'group');
+    controls.setAttribute('aria-label', `Organizar ${displayName(selected)}`);
+
+    const button = (text, label, action, disabled = false) => {
+      const el = document.createElement('button');
+      el.type = 'button';
+      el.textContent = text;
+      el.title = label;
+      el.setAttribute('aria-label', label);
+      el.disabled = disabled;
+      el.addEventListener('click', action);
+      controls.appendChild(el);
+    };
+    const siblings = store.childrenOf(selected.parent_id ?? null);
+    const index = siblings.findIndex(layer => layer.id === selected.id);
+    button('↑', 'Subir una posición', () => this._moveSelectedBy(-1), selected.locked || index <= 0);
+    button('↓', 'Bajar una posición', () => this._moveSelectedBy(1), selected.locked || index < 0 || index >= siblings.length - 1);
+    button('↰', 'Sacar un nivel', () => this._moveSelectedOut(), selected.locked || !selected.parent_id);
+
+    const label = document.createElement('label');
+    label.textContent = 'Mover dentro de ';
+    const parent = document.createElement('select');
+    parent.setAttribute('aria-label', 'Mover capa dentro de');
+    const rootOption = document.createElement('option');
+    rootOption.textContent = 'Nivel superior';
+    rootOption.value = '';
+    parent.appendChild(rootOption);
+    for (const candidate of Object.values(store.doc.layers)) {
+      if (candidate.id === selected.id || candidate.locked || store.isAncestor(selected.id, candidate.id)) continue;
+      const option = document.createElement('option');
+      option.textContent = displayName(candidate);
+      option.value = candidate.id;
+      parent.appendChild(option);
+    }
+    parent.value = selected.parent_id || '';
+    parent.disabled = selected.locked;
+    parent.addEventListener('change', async () => {
+      const newParent = parent.value || null;
+      if (newParent === (store.layerById(selected.id)?.parent_id ?? null)) return;
+      await this._applyMove(selected.id, newParent, newParent ? 'into' : 'root');
+    });
+    label.appendChild(parent);
+    controls.appendChild(label);
+    this.el.appendChild(controls);
+  }
+
+  async _moveSelectedBy(delta) {
+    const selected = store.layerById(store.selectedId);
+    if (!selected || selected.locked) return;
+    const siblings = store.childrenOf(selected.parent_id ?? null);
+    const index = siblings.findIndex(layer => layer.id === selected.id);
+    const target = siblings[index + delta];
+    if (!target) return;
+    await this._applyMove(selected.id, target.id, delta < 0 ? 'before' : 'after');
+  }
+
+  async _moveSelectedOut() {
+    const selected = store.layerById(store.selectedId);
+    if (!selected?.parent_id || selected.locked) return;
+    const parent = store.layerById(selected.parent_id);
+    const grandparentId = parent?.parent_id ?? null;
+    if (grandparentId) await this._applyMove(selected.id, grandparentId, 'into');
+    else await this._applyMove(selected.id, null, 'root');
   }
 
   _appendNode(layer, depth) {
@@ -138,7 +215,8 @@ export class LayerTree {
     row.draggable = false;
     row.addEventListener('pointerdown', (e) => {
       if (e.button !== 0) return;
-      if (e.target.closest?.('button')) return;      // eye / delete own their clicks
+      if (e.target.closest?.('button,select')) return; // controls own their clicks
+      if (store.operationBusy || store.commandBusy) return;
       e.preventDefault();
       const start = { x: e.clientX, y: e.clientY };
       const movable = !layer.locked;
@@ -258,9 +336,19 @@ export class LayerTree {
    * hooks then re-fit the moved subtree.
    */
   async _applyMove(fromId, targetId, zone) {
+    if (store.operationBusy || store.commandBusy) return;
+    const action = () => this._applyMoveCommands(fromId, targetId, zone);
+    if (this._opts.runOperation) {
+      return this._opts.runOperation('Organizando capas…', () => store.withHistoryGroup(action));
+    }
+    return store.withHistoryGroup(action);
+  }
+
+  async _applyMoveCommands(fromId, targetId, zone) {
     const from = store.layerById(fromId);
     if (!from) return;
     if (targetId && (targetId === fromId || store.isAncestor(fromId, targetId))) return;
+    if (zone === 'into' && store.layerById(targetId)?.locked) return;
 
     let newParent;
     if (zone === 'into') newParent = targetId;
@@ -288,14 +376,14 @@ export class LayerTree {
           });
         }
       }
+      if (newParent !== oldParent) {
+        if (newParent) await this._opts.onNest?.(fromId, newParent);
+        else await this._opts.onUnnest?.(fromId);
+      }
       this.render();
       this.viewport?.renderLayers();
       this.viewport?.renderSelection();
       window.dispatchEvent(new CustomEvent('editor:doc-changed'));
-      if (newParent !== oldParent) {
-        if (newParent) this._opts.onNest?.(fromId, newParent);
-        else this._opts.onUnnest?.(fromId);
-      }
     } catch (err) {
       console.error('move failed', err);
       flash(`No se pudo mover: ${err.message}`);
@@ -308,6 +396,9 @@ export class LayerTree {
     const size = 28;
     const svg = asset?.canonical_svg;
     if (!svg) return null;
+    const cacheKey = `${asset?.id || ''}\u0000${color}\u0000${svg}`;
+    const cached = this._thumbnailCache.get(cacheKey);
+    if (cached) return cached.cloneNode(true);
     let doc;
     try {
       doc = new DOMParser().parseFromString(svg, 'image/svg+xml');
@@ -335,7 +426,8 @@ export class LayerTree {
       g.appendChild(np);
     }
     el.appendChild(g);
-    return el;
+    this._thumbnailCache.set(cacheKey, el);
+    return el.cloneNode(true);
   }
 
   _thumbBounds(asset, parsed) {
@@ -356,11 +448,12 @@ export class LayerTree {
   async _select(layerId) {
     store.select(layerId);
     this.render();
-    this.viewport?.renderLayers();
+    this.viewport?.renderSelection();
     window.dispatchEvent(new CustomEvent('editor:selection', { detail: { layerId } }));
   }
 
   async _delete(layerId) {
+    if (store.operationBusy || store.commandBusy) return;
     const node = store.layerById(layerId);
     if (!node) return;
     const subtree = store.subtreeIds(layerId);
@@ -388,6 +481,7 @@ export class LayerTree {
   }
 
   async _toggleVisible(layerId) {
+    if (store.operationBusy || store.commandBusy) return;
     const node = store.layerById(layerId);
     if (!node) return;
     try {

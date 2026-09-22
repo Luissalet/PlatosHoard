@@ -361,6 +361,8 @@ body.tree-dragging, body.tree-dragging * { cursor: grabbing !important; }
   height: 100%;
   display: block;
   background: transparent;
+  touch-action: none;
+  user-select: none;
 }
 
 /* The canvas outer rect is the physical sheet: solid white, exact size. */
@@ -627,4 +629,37 @@ body.tree-dragging, body.tree-dragging * { cursor: grabbing !important; }
 .editor-main.drop-active {
   outline: 3px dashed var(--accent);
   outline-offset: -6px;
+}
+
+/* Keep the workspace usable when the toolbar wraps or the window narrows. */
+body.editor-shell { display: flex; flex-direction: column; }
+.editor-toolbar { flex: 0 0 auto; flex-wrap: wrap; gap: 8px 16px; }
+.editor-main { flex: 1 1 auto; min-height: 0; height: auto; }
+.editor-center { position: relative; }
+.canvas-tools { position: absolute; z-index: 2; top: 10px; left: 10px; right: 10px; display: flex; align-items: center; gap: 12px; pointer-events: none; }
+.canvas-tools button { pointer-events: auto; background: var(--panel); }
+.canvas-tools span { color: #c3c8d2; font-size: 12px; }
+.tree-selection-controls { display: flex; gap: 6px; flex-wrap: wrap; padding: 10px 0; border-top: 1px solid var(--border); margin-top: 8px; }
+.tree-selection-controls button { padding: 6px 8px; background: var(--panel-2); border-color: var(--border); }
+.tree-selection-controls label { display: flex; align-items: center; gap: 8px; width: 100%; font-size: 12px; color: var(--muted); }
+.tree-selection-controls select { flex: 1; min-width: 0; padding: 6px; }
+:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.operation-busy #fit-status::before { content: ''; display: inline-block; width: 8px; height: 8px; border-radius: 50%; background: var(--accent); margin-right: 7px; }
+.operation-busy #editor-svg, .operation-busy .layer-tree { cursor: progress; }
+.fit-status { line-height: 1.5; overflow-wrap: anywhere; }
+@media (max-width: 1100px) {
+  .panel-resizer { display: none; }
+  .editor-main { grid-template-rows: minmax(340px, 1fr) 270px; overflow: auto; }
+  .viewer-3d, .viewer-3d-host { height: 210px; min-height: 180px; }
+  .canvas-tools span { display: none; }
+}
+@media (max-width: 650px) {
+  body.editor-shell { overflow: auto; height: auto; min-height: 100%; }
+  .editor-main { display: flex; flex-direction: column; overflow: visible; }
+  .editor-center { order: -1; height: 65vh; min-height: 320px; flex: none; }
+  .editor-left { overflow: visible; }
+  .editor-right { overflow-x: auto; flex-direction: row; }
+  .editor-right .panel { min-width: 270px; }
+  .layer-tree { max-height: 45vh; }
+  .toolbar-group { gap: 6px; }
 }

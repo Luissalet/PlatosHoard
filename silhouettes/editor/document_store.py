@@ -161,7 +161,7 @@ class DocumentStore:
     def list_documents(self) -> list[dict]:
         """Return id + name + revision for every stored document."""
         out = []
-        for path in sorted(self.documents_dir.glob("*.json")):
+        for path in sorted(self.documents_dir.glob("*.json"), key=lambda p: (p.stat().st_mtime_ns, p.name)):
             doc_id = path.stem
             if not _DOC_ID_PATTERN.match(doc_id):
                 continue

@@ -32,7 +32,7 @@ from silhouettes.editor.asset_adapter import (
     import_asset,
     import_batch,
 )
-from silhouettes.editor.api import create_editor_app
+from silhouettes.editor.api import _natural_name_key, create_editor_app
 from silhouettes.editor.document_store import DocumentStore
 from silhouettes.editor.commands import CommandError, dispatch
 
@@ -366,6 +366,47 @@ class TestPostAssetsAPI:
             doc_after = store.load_document(doc_id)
             assert len(doc_after["layers"]) == 3
             assert len(doc_after["assets"]) == 3
+
+    def test_batch_is_natural_name_descending_after_marco(self, app_ctx):
+        app, store = app_ctx
+        doc = store.create_document(name="natural_order")
+        doc_id = doc["id"]
+        framed = store.commit_command(doc_id, {
+            "command_id": "make_frame",
+            "base_revision": doc["revision"],
+            "type": "generate_frame",
+            "payload": {"wall_w_mm": 8, "wall_h_mm": 12, "padding_mm": 1},
+        })["document"]
+
+        with app.test_client() as client:
+            response = client.post(
+                f"/api/v2/documents/{doc_id}/assets",
+                data={
+                    "base_revision": str(framed["revision"]),
+                    "files[]": [
+                        (io.BytesIO(make_png(width=91)), "0821 Sugimori Style.png"),
+                        (io.BytesIO(make_png(width=93)), "0823 Sugimori Style.png"),
+                        (io.BytesIO(make_png(width=92)), "0822 Sugimori Style.png"),
+                    ],
+                },
+                content_type="multipart/form-data",
+            )
+
+        assert response.status_code == 200, response.get_data(as_text=True)
+        layers = response.get_json()["document"]["layers"].values()
+        roots = sorted(
+            (layer for layer in layers if layer["parent_id"] is None),
+            key=lambda layer: layer["order"],
+        )
+        assert [layer["name"] for layer in roots] == [
+            "Marco", "0823 Sugimori Style", "0822 Sugimori Style", "0821 Sugimori Style",
+        ]
+
+    def test_natural_name_key_compares_digit_runs_numerically(self):
+        names = ["alpha.png", "zeta.png", "9 foo.png", "10 foo.png", "2 foo.png"]
+        assert sorted(names, key=_natural_name_key, reverse=True) == [
+            "10 foo.png", "9 foo.png", "2 foo.png", "zeta.png", "alpha.png",
+        ]
 
     def test_mixed_valid_invalid(self, app_ctx):
         app, store = app_ctx

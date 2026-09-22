@@ -153,10 +153,11 @@ test('overlays are marked non-exportable (data-export=false)', () => {
 
 test('pick: point inside A but outside B/C selects A; outside selects nothing', () => {
   const vp = makeViewport();
-  // A spans [-60,100]; B spans [4,100]; C spans [20,84].
-  // (-40,20) is inside A only (outside B and C).
-  assert.equal(vp.pick({ x: -40, y: 20 }), 'A');
-  assert.equal(vp.pick({ x: 120, y: 120 }), null);
+  // The rendered canonical path is normalized first, then receives A's pose:
+  // A spans [20,180], B [52,148], and C [84,116].
+  // (30,30) is inside A only (outside B and C).
+  assert.equal(vp.pick({ x: 30, y: 30 }), 'A');
+  assert.equal(vp.pick({ x: 190, y: 190 }), null);
 });
 
 test('pick: topmost layer wins (C over B over A at the shared centre)', () => {
@@ -172,28 +173,26 @@ test('pick: hidden layer is not selectable', () => {
   assert.equal(vp.pick({ x: 100, y: 100 }), 'B');
 });
 
-test('pointInLayer respects scale: A spans [-60,100] in world', () => {
+test('pointInLayer respects scale: A spans [20,180] in world', () => {
   const vp = makeViewport();
   const assetA = store.assetById('a');
-  // A spans [-60,100] in world. Local bounds [-50,50].
+  // A's local bounds [-50,50] receive pose T(100,100)·S(1.6).
   assert.equal(vp.pointInLayer('A', assetA, { x: 20, y: 20 }), true);     // centre
   assert.equal(vp.pointInLayer('A', assetA, { x: 80, y: 20 }), true);     // inside
-  assert.equal(vp.pointInLayer('A', assetA, { x: 100, y: 20 }), true);    // edge
-  assert.equal(vp.pointInLayer('A', assetA, { x: 101, y: 20 }), false);   // just outside
-  assert.equal(vp.pointInLayer('A', assetA, { x: -61, y: 20 }), false);   // just outside
+  assert.equal(vp.pointInLayer('A', assetA, { x: 180, y: 20 }), true);    // edge
+  assert.equal(vp.pointInLayer('A', assetA, { x: 181, y: 20 }), false);   // just outside
+  assert.equal(vp.pointInLayer('A', assetA, { x: 19, y: 20 }), false);    // just outside
 });
 
 test('selection outline uses local bounds, not the raw source viewbox', () => {
   const vp = makeViewport();
   store.select('A');
   vp.renderSelection();
-  const poly = vp.handles.querySelector('polygon');
-  assert.ok(poly, 'selection polygon exists');
-  const pts = poly.getAttribute('points').split(' ').map(p => p.split(',').map(Number));
-  const xs = pts.map(p => p[0]), ys = pts.map(p => p[1]);
-  // A: local bounds [-50,50]² under W_A → [-60,100]²
-  assert.ok(Math.abs(Math.min(...xs) + 60) < 1e-6, `min x ${Math.min(...xs)}`);
-  assert.ok(Math.abs(Math.max(...xs) - 100) < 1e-6, `max x ${Math.max(...xs)}`);
-  assert.ok(Math.abs(Math.min(...ys) + 60) < 1e-6, `min y ${Math.min(...ys)}`);
-  assert.ok(Math.abs(Math.max(...ys) - 100) < 1e-6, `max y ${Math.max(...ys)}`);
+  const path = vp.handles.querySelector('path');
+  assert.ok(path, 'selection silhouette exists');
+  // The overlay uses the canonical path under pathToLocalMatrix, while the
+  // outer group carries the pose-only layer matrix.
+  const group = vp.handles.querySelector('g');
+  assert.match(group.getAttribute('transform'), /^matrix\(/);
+  assert.match(path.getAttribute('stroke-dasharray'), /4 2/);
 });

@@ -58,6 +58,43 @@ class TestFitInside:
         assert result.pose.tx == pytest.approx(50.0)
         assert result.pose.ty == pytest.approx(50.0)
 
+    def test_fixed_center_never_drifts_during_exact_polish(self):
+        # A concave boundary makes the sparse raster estimate optimistic and
+        # exercises polish's recovery path.  At-position fitting may shrink,
+        # but must not silently move away from the pointer.
+        parent = box(0, 0, 100, 100).difference(box(0, 45, 48, 55))
+        child = box(-10, -10, 10, 10)
+        requested = (51.0, 50.0)
+
+        result = fit_inside(child, parent, fixed_center=requested,
+                            max_evaluations=256, seed=42)
+
+        assert result.pose is not None
+        assert result.pose.tx == requested[0]
+        assert result.pose.ty == requested[1]
+        assert fits(parent, apply_pose(child, result.pose), 0.0)
+
+    def test_fixed_center_direct_search_keeps_exact_padding(self):
+        parent = box(0, 0, 100, 100)
+        child = box(-10, -10, 10, 10)
+
+        result = fit_inside(child, parent, fixed_center=(50, 50),
+                            padding_mm=5, max_evaluations=256)
+
+        assert result.pose is not None
+        candidate = apply_pose(child, result.pose)
+        assert fits(parent, candidate, 5.0)
+        assert result.pose.scale == pytest.approx(4.5, rel=5e-4)
+
+    def test_fixed_center_in_hole_returns_no_candidate(self):
+        parent = box(0, 0, 100, 100).difference(box(35, 35, 65, 65))
+        child = box(-5, -5, 5, 5)
+
+        result = fit_inside(child, parent, fixed_center=(50, 50),
+                            max_evaluations=256)
+
+        assert result.pose is None
+
     def test_obstacles_avoided(self):
         parent = box(0, 0, 100, 100)
         child = box(-10, -10, 10, 10)
@@ -74,3 +111,41 @@ class TestFitInside:
         with pytest.raises(FittingError) as exc:
             fit_inside(off_centre, parent, max_evaluations=256)
         assert exc.value.code == "UNCENTRED_ASSET"
+
+    def test_equal_scale_pockets_prefer_parent_torso(self):
+        # A central body and a remote hand can accept the same maximum scale.
+        # "Best fit" should choose the useful body placement deterministically.
+        torso = box(-60, -50, 60, 50)
+        hand = box(140, -50, 240, 50)
+        arm = box(60, -3, 140, 3)
+        parent = torso.union(arm).union(hand)
+        child = box(-10, -10, 10, 10)
+
+        result = fit_inside(child, parent, max_evaluations=256, seed=42)
+
+        assert result.pose is not None
+        assert abs(result.pose.tx) < 15.0
+        assert fits(parent, apply_pose(child, result.pose), 0.0)
+
+    def test_evaluation_budget_is_honoured(self):
+        parent = box(0, 0, 100, 100)
+        child = box(-10, -10, 10, 10)
+
+        result = fit_inside(child, parent, angles_deg=(0, 15, 30, 45),
+                            max_evaluations=32, seed=42)
+
+        assert result.evaluations <= 32
+        if result.pose is not None:
+            assert fits(parent, apply_pose(child, result.pose), 0.0)
+
+    def test_fast_profile_remains_exact_and_near_full_quality(self):
+        parent = box(-60, -50, 60, 50).union(box(60, -4, 150, 4)).union(
+            box(150, -35, 210, 35))
+        child = box(-12, -18, 12, 18)
+
+        full = fit_inside(child, parent, max_evaluations=512, seed=42)
+        fast = fit_inside(child, parent, max_evaluations=512, seed=42, fast=True)
+
+        assert full.pose is not None and fast.pose is not None
+        assert fits(parent, apply_pose(child, fast.pose), 0.0)
+        assert fast.pose.scale >= full.pose.scale * 0.95

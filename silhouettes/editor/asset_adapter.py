@@ -195,6 +195,8 @@ def _import_png(
     data: bytes,
     filename: str,
     mm_per_source_unit: Optional[float] = None,
+    *,
+    smoothing: bool = True,
 ) -> ImportedAsset:
     """Import a PNG through the existing mask→trace→vector engine."""
     if len(data) > MAX_FILE_BYTES:
@@ -216,7 +218,8 @@ def _import_png(
         raise AssetImportError("EMPTY_MASK", "PNG has no foreground pixels", filename)
 
     # Stage 2: trace to SVG (no blur, no inversion, no d-string edits)
-    svg = trace_mask(mask, PRESETS["exact"])
+    preset = "exact" if smoothing else "pixel"
+    svg = trace_mask(mask, PRESETS[preset])
 
     # Stage 3: parse to polygons
     vec = parse_vector(svg, tolerance=PREVIEW_TOLERANCE)
@@ -255,7 +258,7 @@ def _import_png(
         geometry_hash=geom_hash,
         polygon_bounds=all_bounds,
         polygon_count=len(polygons),
-        trace_settings={"preset": "exact"},
+        trace_settings={"preset": preset, "smoothing": smoothing},
         curve_tolerance_source=PREVIEW_TOLERANCE,
     )
 
@@ -332,6 +335,8 @@ def import_asset(
     data: bytes,
     filename: str,
     mm_per_source_unit: Optional[float] = None,
+    *,
+    smoothing: bool = True,
 ) -> ImportedAsset:
     """Import a single PNG or SVG file into an ``ImportedAsset``.
 
@@ -344,6 +349,9 @@ def import_asset(
     mm_per_source_unit:
         Optional calibration override.  Defaults to ``25.4/96`` for PNG
         (spec §5.1) and ``1.0`` for SVG.
+    smoothing:
+        Smooth PNG contours by default. False preserves pixel edges.
+        SVG geometry is imported unchanged in either mode.
 
     Raises
     ------
@@ -352,7 +360,7 @@ def import_asset(
     """
     lower = filename.lower()
     if lower.endswith(".png"):
-        return _import_png(data, filename, mm_per_source_unit)
+        return _import_png(data, filename, mm_per_source_unit, smoothing=smoothing)
     elif lower.endswith(".svg"):
         return _import_svg(data, filename, mm_per_source_unit)
     else:
@@ -365,6 +373,8 @@ def import_asset(
 
 def import_batch(
     files: List[Tuple[str, bytes]],
+    *,
+    smoothing: bool = True,
 ) -> Tuple[List[ImportedAsset], List[Dict[str, str]]]:
     """Import a batch of files.
 
@@ -400,7 +410,7 @@ def import_batch(
 
     for filename, data in files:
         try:
-            asset = import_asset(data, filename)
+            asset = import_asset(data, filename, smoothing=smoothing)
             # Deduplicate by source hash: reuse existing asset_id
             if asset.source_sha256 in seen_hashes:
                 existing = seen_hashes[asset.source_sha256]

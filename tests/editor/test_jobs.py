@@ -17,6 +17,7 @@ from __future__ import annotations
 import multiprocessing as mp
 import time
 import uuid
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 import pytest
@@ -146,7 +147,8 @@ class TestJobScheduler:
         sched = JobScheduler(output_dir=tmp_path)
         try:
             rec = sched.submit("synthetic", {"task": "synthetic", "iterations": 3})
-            assert rec.state == JobState.QUEUED
+            assert rec.state == JobState.RUNNING
+            assert rec.phase == "running"
 
             # Poll until terminal (max 10 s)
             deadline = time.time() + 10
@@ -201,6 +203,60 @@ class TestJobScheduler:
 
             # Cancelling a completed job must return False
             assert sched.cancel(rec.id) is False
+        finally:
+            sched.shutdown()
+
+    def test_cancelling_queued_job_does_not_cancel_running_job(self, tmp_path):
+        sched = JobScheduler(output_dir=tmp_path)
+        try:
+            running = sched.submit("synthetic", {"task": "synthetic", "iterations": 200_000_000})
+            queued = sched.submit("synthetic", {"task": "synthetic", "iterations": 1})
+            assert running.state == JobState.RUNNING
+            assert queued.state == JobState.QUEUED
+
+            assert sched.cancel(queued.id) is True
+            assert sched.get(queued.id).state == JobState.CANCELLED
+            assert sched._cancel_event.is_set() is False
+            assert sched.get(running.id).state == JobState.RUNNING
+        finally:
+            sched.shutdown()
+
+    def test_next_queued_job_starts_after_active_job_finishes(self, tmp_path):
+        sched = JobScheduler(output_dir=tmp_path)
+        try:
+            first = sched.submit("synthetic", {"task": "synthetic", "iterations": 1})
+            second = sched.submit("synthetic", {"task": "synthetic", "iterations": 1})
+            assert first.state == JobState.RUNNING
+            assert second.state == JobState.QUEUED
+            deadline = time.time() + 10
+            while time.time() < deadline:
+                sched.get(second.id)
+                if second.state in TERMINAL_STATES:
+                    break
+                time.sleep(0.05)
+            assert first.state == JobState.COMPLETED
+            assert second.state == JobState.COMPLETED
+            assert second.started_at is not None
+            assert second.started_at >= first.finished_at
+        finally:
+            sched.shutdown()
+
+    def test_concurrent_submissions_dispatch_only_one_worker_job(self, tmp_path):
+        sched = JobScheduler(output_dir=tmp_path)
+        try:
+            with ThreadPoolExecutor(max_workers=8) as threads:
+                records = list(threads.map(
+                    lambda _: sched.submit(
+                        "synthetic", {"task": "synthetic", "iterations": 200_000_000}
+                    ),
+                    range(8),
+                ))
+            running = [rec for rec in records if rec.state == JobState.RUNNING]
+            queued = [rec for rec in records if rec.state == JobState.QUEUED]
+            assert len(running) == 1
+            assert len(queued) == 7
+            assert sched._active_job_id == running[0].id
+            assert len(sched._futures) == 1
         finally:
             sched.shutdown()
 
@@ -271,6 +327,16 @@ class TestJobAPI:
             r = c.get("/api/v2/jobs/job_nonexistent")
             assert r.status_code == 404
             assert r.get_json()["error"]["code"] == "NOT_FOUND"
+
+    def test_export_rejects_malformed_png_width(self, app_ctx):
+        app, store, _ = app_ctx
+        doc = store.create_document(name="bad resolution")
+        with app.test_client() as c:
+            r = c.post(f"/api/v2/documents/{doc['id']}/exports", json={
+                "png_width_px": "not-a-number",
+            })
+        assert r.status_code == 400
+        assert r.get_json()["error"]["code"] == "INVALID_RESOLUTION"
 
     def test_get_job_returns_state(self, app_ctx):
         app, _, sched = app_ctx

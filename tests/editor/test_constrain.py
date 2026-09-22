@@ -55,11 +55,12 @@ def test_constrain_keeps_valid_pose():
     _assert_child_inside(doc, out)
 
 
-def test_constrain_shrinks_when_child_crosses_parent():
+@pytest.mark.parametrize("fast", [False, True])
+def test_constrain_shrinks_when_child_crosses_parent(fast):
     doc = _doc_with_nested_boxes()
     # scale=3 → child half-extent 60 > parent 50 → crosses
     pose = Pose(tx=0, ty=0, scale=3.0, angle_deg=0)
-    out = _constrain_pose_to_parent(doc, "child", pose, padding_mm=0)
+    out = _constrain_pose_to_parent(doc, "child", pose, padding_mm=0, fast=fast)
     assert out.scale < 3.0
     _assert_child_inside(doc, out)
 

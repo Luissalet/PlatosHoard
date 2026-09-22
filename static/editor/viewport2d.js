@@ -19,6 +19,9 @@ export class Viewport2D {
     this.overlays = svgRoot.querySelector('#constraint-overlays');
     this.handles = svgRoot.querySelector('#selection-handles');
     this._layerEls = new Map(); // layer_id -> <g>
+    // Parsing canonical SVG strings dominates repeated layer rebuilds. Cache
+    // by the source string so imports that replace an asset naturally miss.
+    this._pathCache = new Map();
   }
 
   _ensureDefs(svgRoot) {
@@ -267,6 +270,8 @@ export class Viewport2D {
   }
 
   _extractPaths(svgText) {
+    const cached = this._pathCache.get(svgText);
+    if (cached) return cached;
     // Parse SVG text and return the `d` attribute of every <path>.
     // Uses DOMParser (browser) — no regex on geometry.
     const doc = new DOMParser().parseFromString(svgText, 'image/svg+xml');
@@ -275,6 +280,7 @@ export class Viewport2D {
       const d = p.getAttribute('d');
       if (d) out.push(d);
     }
+    this._pathCache.set(svgText, out);
     return out;
   }
 

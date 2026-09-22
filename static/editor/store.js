@@ -15,10 +15,15 @@ export class EditorStore {
     this.fitToCanvas = false;   // constrain + max-fit roots to usable canvas
     this.matrioskaMode = false; // constrain + max-fit children inside parent silhouette
     this._commandSeq = 0;
+    this._commandTail = Promise.resolve();
+    this._pendingCommandCount = 0;
     this._pendingHistorySnapshot = null; // pre-action state handed over by a gesture
     // Undo/redo history (spec §13.4): confirmed contents only, max 100 actions.
     this.history = [];           // snapshots: {assets, layers}
     this.historyIndex = -1;      // index of the current state in history
+    this._historyGroupDepth = 0;
+    this._historyGroupBefore = null;
+    this._historyGroupChanged = false;
   }
 
   // ---- document lifecycle -------------------------------------------------
@@ -33,6 +38,7 @@ export class EditorStore {
     });
     if (!res.ok) throw await this._error(res);
     this._applyDocumentPayload(await res.json());
+    this._resetHistory();
     return this.doc;
   }
 
@@ -40,10 +46,19 @@ export class EditorStore {
     const res = await fetch(`${this.baseUrl}/documents/${encodeURIComponent(docId)}`);
     if (!res.ok) throw await this._error(res);
     this._applyDocumentPayload(await res.json());
+    this._resetHistory();
     return this.doc;
   }
 
   async commitCommand(type, payload, commandId = null) {
+    // Capture gesture state before queueing: another gesture may begin while
+    // this request is waiting for an earlier command to finish.
+    const before = this._pendingHistorySnapshot;
+    this._pendingHistorySnapshot = null;
+    return this._enqueueCommand(() => this._commitCommand(type, payload, commandId, before));
+  }
+
+  async _commitCommand(type, payload, commandId = null, historyBefore = null) {
     this._commandSeq += 1;
     const body = { ...(payload || {}) };
     // Only apply_fit_result reads base_revision from the payload body.
@@ -58,20 +73,44 @@ export class EditorStore {
       type,
       payload: body,
     };
-    const res = await fetch(`${this.baseUrl}/documents/${encodeURIComponent(this.doc.id)}/commands`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(envelope),
-    });
-    if (!res.ok) throw await this._error(res);
-    const result = await res.json();
-    if (type !== 'restore_snapshot') {
-      // Record the pre-action state so undo can restore it (one gesture = one action).
-      this._pushHistory();
+    try {
+      const res = await fetch(`${this.baseUrl}/documents/${encodeURIComponent(this.doc.id)}/commands`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(envelope),
+      });
+      if (!res.ok) throw await this._error(res);
+      const result = await res.json();
+      this._applyDocumentPayload(result);
+      if (type !== 'restore_snapshot') {
+        this._recordSuccessfulCommand(historyBefore);
+      }
+      return result;
+    } catch (err) {
+      // Gestures update the live document optimistically. Restore the full
+      // confirmed snapshot for HTTP, network, parse, and other failures.
+      if (historyBefore && this.doc) {
+        this.doc.canvas = cloneJson(historyBefore.canvas);
+        this.doc.assets = cloneJson(historyBefore.assets);
+        this.doc.layers = cloneJson(historyBefore.layers);
+      }
+      throw err;
     }
-    this._applyDocumentPayload(result);
-    this._syncHistoryPointer();
+  }
+
+  _enqueueCommand(operation) {
+    this._pendingCommandCount += 1;
+    const run = () => Promise.resolve().then(operation)
+      .finally(() => { this._pendingCommandCount -= 1; });
+    const result = this._commandTail.then(run, run);
+    // Keep the queue usable after a rejected request without creating an
+    // unhandled rejection on the internal tail promise.
+    this._commandTail = result.catch(() => {});
     return result;
+  }
+
+  get commandBusy() {
+    return this._pendingCommandCount > 0;
   }
 
   /**
@@ -94,47 +133,88 @@ export class EditorStore {
     }
   }
 
+  /** Apply a successful non-command API response and make it undoable. */
+  applyExternalMutationPayload(payload, beforeSnapshot = null) {
+    const before = beforeSnapshot || this.history[this.historyIndex] || this._snapshot();
+    this._applyDocumentPayload(payload);
+    this._recordSuccessfulCommand(before);
+    return this.doc;
+  }
+
   // ---- undo / redo (spec §13.4) -------------------------------------------
 
   _snapshot() {
     return {
-      assets: JSON.parse(JSON.stringify(this.doc?.assets ?? {})),
-      layers: JSON.parse(JSON.stringify(this.doc?.layers ?? {})),
+      canvas: cloneJson(this.doc?.canvas ?? {}),
+      assets: cloneJson(this.doc?.assets ?? {}),
+      layers: cloneJson(this.doc?.layers ?? {}),
     };
   }
 
-  _pushHistory() {
+  _resetHistory() {
+    this.history = this.doc ? [this._snapshot()] : [];
+    this.historyIndex = this.history.length - 1;
+    this._pendingHistorySnapshot = null;
+    this._historyGroupDepth = 0;
+    this._historyGroupBefore = null;
+    this._historyGroupChanged = false;
+  }
+
+  /** Start a fresh undo timeline after replacing the active document. */
+  resetHistory() {
+    this._resetHistory();
+  }
+
+  _appendHistoryState(before, after) {
     if (!this.doc) return;
-    // A new action after undo empties redo.
     if (this.historyIndex < this.history.length - 1) {
       this.history.length = this.historyIndex + 1;
     }
-    // A gesture may have written an optimistic pose into the doc before the
-    // commit; it hands us the true pre-action snapshot through this field.
-    const snap = this._pendingHistorySnapshot || this._snapshot();
-    this._pendingHistorySnapshot = null;
-    this.history.push(snap);
-    if (this.history.length > 100) this.history.shift();
+    if (this.history.length === 0) {
+      this.history.push(before);
+    } else if (JSON.stringify(this.history[this.historyIndex]) !== JSON.stringify(before)) {
+      // Optimistic gestures mutate the live document. Replace the current
+      // timeline state with their explicitly captured pre-gesture state.
+      this.history[this.historyIndex] = before;
+    }
+    if (JSON.stringify(this.history[this.history.length - 1]) !== JSON.stringify(after)) {
+      this.history.push(after);
+    }
+    // 100 undoable actions require at most 101 states.
+    while (this.history.length > 101) this.history.shift();
     this.historyIndex = this.history.length - 1;
   }
 
-  _syncHistoryPointer() {
-    // After a restore_snapshot the current state equals the snapshot we
-    // just restored; move the pointer there so redo/undo stay consistent.
-    if (this.historyIndex >= 0 && this.history[this.historyIndex]) {
-      const cur = this._snapshot();
-      const same = (a, b) => JSON.stringify(a) === JSON.stringify(b);
-      if (same(this.history[this.historyIndex], cur)) return;
+  _recordSuccessfulCommand(historyBefore) {
+    const before = historyBefore || this.history[this.historyIndex] || this._snapshot();
+    if (this._historyGroupDepth > 0) {
+      if (!this._historyGroupChanged) this._historyGroupBefore = before;
+      this._historyGroupChanged = true;
+      return;
     }
-    // Fallback: treat the current state as the newest entry.
-    if (this.history.length === 0) {
-      this.history.push(this._snapshot());
-      this.historyIndex = 0;
+    this._appendHistoryState(before, this._snapshot());
+  }
+
+  /** Collapse all successful commands in callback into one undoable action. */
+  async withHistoryGroup(callback) {
+    if (typeof callback !== 'function') throw new TypeError('callback must be a function');
+    this._historyGroupDepth += 1;
+    try {
+      return await callback();
+    } finally {
+      this._historyGroupDepth -= 1;
+      if (this._historyGroupDepth === 0) {
+        if (this._historyGroupChanged) {
+          this._appendHistoryState(this._historyGroupBefore, this._snapshot());
+        }
+        this._historyGroupBefore = null;
+        this._historyGroupChanged = false;
+      }
     }
   }
 
   canUndo() {
-    return this.historyIndex >= 0;
+    return this.historyIndex > 0;
   }
 
   canRedo() {
@@ -142,19 +222,27 @@ export class EditorStore {
   }
 
   async undo() {
-    if (!this.canUndo()) return null;
-    const snapshot = this.history[this.historyIndex];
-    const result = await this.commitCommand('restore_snapshot', { snapshot });
-    this.historyIndex -= 1;
-    return result;
+    return this._enqueueCommand(async () => {
+      if (!this.canUndo()) return null;
+      const target = this.historyIndex - 1;
+      const result = await this._commitCommand('restore_snapshot', {
+        snapshot: this.history[target],
+      });
+      this.historyIndex = target;
+      return result;
+    });
   }
 
   async redo() {
-    if (!this.canRedo()) return null;
-    const snapshot = this.history[this.historyIndex + 1];
-    const result = await this.commitCommand('restore_snapshot', { snapshot });
-    this.historyIndex += 1;
-    return result;
+    return this._enqueueCommand(async () => {
+      if (!this.canRedo()) return null;
+      const target = this.historyIndex + 1;
+      const result = await this._commitCommand('restore_snapshot', {
+        snapshot: this.history[target],
+      });
+      this.historyIndex = target;
+      return result;
+    });
   }
 
   // ---- selection (UI state, not persisted) --------------------------------
@@ -230,6 +318,10 @@ export class EditorStore {
     err.layerId = body?.error?.layer_id || null;
     return err;
   }
+}
+
+function cloneJson(value) {
+  return JSON.parse(JSON.stringify(value));
 }
 
 // Singleton for the page

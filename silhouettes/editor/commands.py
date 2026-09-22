@@ -261,7 +261,7 @@ def cmd_add_layers(doc: dict, payload: Mapping[str, Any]) -> dict:
 
     The assets are inserted into ``doc["assets"]`` and the layers into
     ``doc["layers"]`` in a single transaction.  Duplicate asset hashes are
-    deduplicated: if an asset with the same ``source_sha256`` already exists,
+    deduplicated: if an asset with the same source and smoothing mode exists,
     the new layer references the existing asset_id instead of creating a
     duplicate.
     """
@@ -276,12 +276,18 @@ def cmd_add_layers(doc: dict, payload: Mapping[str, Any]) -> dict:
     doc_assets = doc.setdefault("assets", {})
     doc_layers = doc.setdefault("layers", {})
 
-    # Index existing assets by source_sha256 for dedup
-    existing_by_hash: dict[str, str] = {}
+    # Old PNG assets have no smoothing field and use the original smooth mode.
+    # A second import in pixel mode must retain its own canonical geometry.
+    def import_key(asset):
+        smoothing = (asset.get("trace_settings") or {}).get("smoothing", True)
+        return (asset.get("source_sha256"),
+                smoothing if asset.get("source_type") == "png" else True)
+
+    existing_by_hash: dict[tuple, str] = {}
     for aid, a in doc_assets.items():
         h = a.get("source_sha256")
         if h:
-            existing_by_hash[h] = aid
+            existing_by_hash[import_key(a)] = aid
 
     # Insert assets (dedup by hash)
     asset_id_map: dict[str, str] = {}  # incoming asset_id → final asset_id
@@ -292,14 +298,15 @@ def cmd_add_layers(doc: dict, payload: Mapping[str, Any]) -> dict:
         if not isinstance(aid, str) or not aid:
             raise CommandError("INVALID_STRUCTURE", "asset.id is required")
         h = a.get("source_sha256")
-        if h and h in existing_by_hash:
+        key = import_key(a)
+        if h and key in existing_by_hash:
             # Reuse existing asset
-            asset_id_map[aid] = existing_by_hash[h]
+            asset_id_map[aid] = existing_by_hash[key]
         else:
             doc_assets[aid] = dict(a)
             asset_id_map[aid] = aid
             if h:
-                existing_by_hash[h] = aid
+                existing_by_hash[key] = aid
 
     # Determine next order/stack_rank for roots
     root_orders = [
@@ -674,10 +681,10 @@ def cmd_restore_snapshot(doc: dict, payload: Mapping[str, Any]) -> dict:
 
     The client keeps a local history of confirmed contents (max 100 actions)
     and sends the snapshot to restore.  The server replaces the document's
-    ``assets`` and ``layers`` with the snapshot's, validates the result and
+    ``canvas``, ``assets`` and ``layers`` with the snapshot's, validates the result and
     creates a NEW revision — undo never decrements the revision counter.
     Document identity (``id``, ``name``, ``schema_version``, ``units``,
-    ``canvas``, ``default_extrusion_mm``, ``stack_gap_mm``) is preserved.
+    ``default_extrusion_mm``, ``stack_gap_mm``) is preserved.
     """
     snapshot = payload.get("snapshot")
     if not isinstance(snapshot, Mapping):
@@ -689,6 +696,9 @@ def cmd_restore_snapshot(doc: dict, payload: Mapping[str, Any]) -> dict:
         raise CommandError("INVALID_STRUCTURE", "snapshot.assets must be an object")
     if not isinstance(snapshot.get("layers"), Mapping):
         raise CommandError("INVALID_STRUCTURE", "snapshot.layers must be an object")
+    if not isinstance(snapshot.get("canvas"), Mapping):
+        raise CommandError("INVALID_STRUCTURE", "snapshot.canvas must be an object")
+    doc["canvas"] = copy.deepcopy(dict(snapshot["canvas"]))
     doc["assets"] = copy.deepcopy(dict(snapshot["assets"]))
     doc["layers"] = copy.deepcopy(dict(snapshot["layers"]))
     return doc
