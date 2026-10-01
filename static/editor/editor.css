@@ -1,13 +1,13 @@
 :root {
-  --bg: #0f1115;
-  --panel: #1a1d24;
-  --panel-2: #20242d;
-  --border: #2a2e38;
-  --text: #e4e6eb;
-  --muted: #8b8f9a;
-  --accent: #4f8cff;
-  --danger: #ff6b6b;
-  --ok: #4caf50;
+  --bg: var(--hoard-deep);
+  --panel: var(--hoard-surface);
+  --panel-2: var(--hoard-elevated);
+  --border: var(--hoard-border);
+  --text: var(--hoard-text);
+  --muted: var(--hoard-text-dim);
+  --accent: var(--hoard-accent);
+  --danger: var(--hoard-danger);
+  --ok: var(--hoard-success);
 }
 
 * { box-sizing: border-box; }
@@ -16,7 +16,7 @@ body.editor-shell {
   margin: 0;
   background: var(--bg);
   color: var(--text);
-  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+  font-family: var(--hoard-font-sans);
   overflow: hidden;
 }
 
@@ -25,8 +25,8 @@ body.editor-shell {
   align-items: center;
   justify-content: space-between;
   gap: 16px;
-  min-height: 52px;
-  padding: 8px 12px;
+  min-height: var(--hoard-header-h);
+  padding: 8px 16px;
   border-bottom: 1px solid var(--border);
   background: var(--panel);
 }
@@ -51,7 +51,7 @@ input, select, button {
   color: var(--text);
   background: var(--panel-2);
   border: 1px solid var(--border);
-  border-radius: 6px;
+  border-radius: var(--hoard-radius);
 }
 
 input[type="number"] {
@@ -69,7 +69,7 @@ button, .link {
 button {
   background: var(--accent);
   border-color: transparent;
-  color: white;
+  color: var(--hoard-accent-ink);
 }
 
 button:disabled {
@@ -166,7 +166,7 @@ body.tree-dragging, body.tree-dragging * { cursor: grabbing !important; }
   padding: 3px 8px;
   border-radius: 6px;
   background: var(--accent);
-  color: #fff;
+  color: var(--hoard-accent-ink);
   font-size: 0.78rem;
   font-weight: 600;
   box-shadow: 0 4px 14px rgba(0, 0, 0, 0.45);
@@ -194,7 +194,7 @@ body.tree-dragging, body.tree-dragging * { cursor: grabbing !important; }
 .tree-row.drop-into {
   outline: 2px solid var(--accent);
   outline-offset: -2px;
-  background: rgba(79, 140, 255, 0.15);
+  background: var(--hoard-accent-soft);
 }
 .tree-row.drop-before {
   box-shadow: inset 0 3px 0 0 var(--ok);
@@ -274,7 +274,7 @@ body.tree-dragging, body.tree-dragging * { cursor: grabbing !important; }
   background: var(--panel-2);
 }
 .tree-row.selected {
-  background: rgba(79, 140, 255, 0.18);
+  background: var(--hoard-accent-soft);
 }
 .tree-thumb {
   flex: none;
@@ -314,7 +314,7 @@ body.tree-dragging, body.tree-dragging * { cursor: grabbing !important; }
 .editor-center {
   min-width: 0;
   min-height: 0;
-  background: #2a2e38; /* neutral backdrop so the canvas reads as an object */
+  background: var(--hoard-sunken); /* neutral backdrop so the canvas reads as an object */
   border: 1px solid var(--border);
   border-radius: 10px;
   overflow: hidden;
@@ -323,8 +323,8 @@ body.tree-dragging, body.tree-dragging * { cursor: grabbing !important; }
 .panel {
   background: var(--panel);
   border: 1px solid var(--border);
-  border-radius: 10px;
-  padding: 12px;
+  border-radius: var(--hoard-radius-lg);
+  padding: 16px;
 }
 
 .panel h2 {
@@ -402,7 +402,7 @@ body.tree-dragging, body.tree-dragging * { cursor: grabbing !important; }
   height: 260px;
   border: 1px solid var(--border);
   border-radius: 8px;
-  background: #1f2937;
+  background: var(--hoard-sunken);
   overflow: hidden;
 }
 
@@ -437,10 +437,12 @@ body.tree-dragging, body.tree-dragging * { cursor: grabbing !important; }
 
 /* ---- Toolbar polish ------------------------------------------------- */
 .brand {
+  font-family: var(--hoard-font-serif);
+  font-size: 20px;
   font-weight: 700;
-  letter-spacing: 0.02em;
+  letter-spacing: 0.01em;
   margin-right: 6px;
-  color: var(--text);
+  color: var(--hoard-accent);
 }
 .toolbar-sep {
   width: 1px;
@@ -483,7 +485,7 @@ body.tree-dragging, body.tree-dragging * { cursor: grabbing !important; }
 }
 .btn-primary {
   background: var(--accent);
-  color: #fff;
+  color: var(--hoard-accent-ink);
   font-weight: 650;
 }
 .btn-big {
@@ -491,7 +493,7 @@ body.tree-dragging, body.tree-dragging * { cursor: grabbing !important; }
   padding: 12px 14px;
   font-size: 1rem;
   border-radius: 8px;
-  box-shadow: 0 6px 18px rgba(79, 140, 255, 0.25);
+  box-shadow: 0 6px 18px rgba(var(--hoard-accent-rgb), 0.25);
 }
 .btn-big:hover:not(:disabled) {
   filter: brightness(1.08);
@@ -516,7 +518,7 @@ body.tree-dragging, body.tree-dragging * { cursor: grabbing !important; }
   height: 20px;
   border-radius: 50%;
   background: var(--accent);
-  color: #fff;
+  color: var(--hoard-accent-ink);
   font-size: 0.72rem;
   font-weight: 700;
   letter-spacing: 0;
@@ -638,7 +640,7 @@ body.editor-shell { display: flex; flex-direction: column; }
 .editor-center { position: relative; }
 .canvas-tools { position: absolute; z-index: 2; top: 10px; left: 10px; right: 10px; display: flex; align-items: center; gap: 12px; pointer-events: none; }
 .canvas-tools button { pointer-events: auto; background: var(--panel); }
-.canvas-tools span { color: #c3c8d2; font-size: 12px; }
+.canvas-tools span { color: var(--hoard-text-muted); font-size: 12px; }
 .tree-selection-controls { display: flex; gap: 6px; flex-wrap: wrap; padding: 10px 0; border-top: 1px solid var(--border); margin-top: 8px; }
 .tree-selection-controls button { padding: 6px 8px; background: var(--panel-2); border-color: var(--border); }
 .tree-selection-controls label { display: flex; align-items: center; gap: 8px; width: 100%; font-size: 12px; color: var(--muted); }
@@ -663,3 +665,9 @@ body.editor-shell { display: flex; flex-direction: column; }
   .layer-tree { max-height: 45vh; }
   .toolbar-group { gap: 6px; }
 }
+
+/* Hoard family chrome */
+.editor-toolbar { gap: 10px; }
+.editor-toolbar .toolbar-group { gap: 6px; }
+.editor-toolbar .btn-ghost { padding: 6px 8px; font-size: 0.9rem; }
+.brand { font-size: 18px; }
