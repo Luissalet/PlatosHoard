@@ -76,7 +76,7 @@ def test_announce_emits_one_event_per_stl_with_ref_and_title(tmp_path, sent):
     first, second = (data for _, data in sent)
     assert first["ref"] == second["ref"] == "hoard://plato/export/job_abc123"
     assert first["title"] == "Escudo - Fondo (normal_registered)" and second["title"] == "Escudo - Letras (inverse_registered)"
-    assert first["path"].endswith("job_abc123/normal_registered/a.stl") and (tmp_path / "exports" / "job_abc123" / "normal_registered" / "a.stl").is_file()
+    assert first["path"].replace("\\", "/").endswith("job_abc123/normal_registered/a.stl") and (tmp_path / "exports" / "job_abc123" / "normal_registered" / "a.stl").is_file()
     assert first["format"] == "stl" and first["layer_id"] == "L1" and payloads == [d for _, d in sent]
     assert slept == [plato_family.EVENT_SPACING_S]  # the rule cooldown: the second event waits
 
