@@ -18,7 +18,13 @@ Open [http://127.0.0.1:5000/editor](http://127.0.0.1:5000/editor). On other oper
 
 ## Faustus and Hoard Hub
 
-[`faustus-plugin.json`](faustus-plugin.json) lets Hoard Hub discover and start the app. Faustus reaches its REST editor API through the generic REST MCP bridge defined by its manifest. Plato currently has **no** shared `/api/agent/call` contract, agent token or Hub event publisher; the bridge and Hub handle discovery and launch.
+[`faustus-plugin.json`](faustus-plugin.json) lets Hoard Hub discover and start the app. Faustus reaches its REST editor API through the generic REST MCP bridge defined by its manifest. Plato has **no** shared `/api/agent/call` contract: the bridge and Hub handle discovery and launch.
+
+### Export events
+
+When `python app.py` runs and an export job finishes with STL in its formats, Plato unpacks every STL of the bundle into `data/exports/<job id>/<family>/` and announces each one on the family bus as `plato.export.done {path, ref, title, format, job_id, document_id, layer_id, family}`, where `ref` is `hoard://plato/export/<job id>` and `title` is the document and layer name. The Hub's recommended rule hands the `path` to the model library (`model_import_file`). Exports have no 3MF format, so only STL is announced. The events of one bundle are sent 5.5 s apart (`PLATO_EVENT_SPACING_S`) because that rule ignores a repeat inside its 5 s cooldown. Plato writes `data/mcp-token` at start (the Hub knows the sender by it). A job is noticed by a background watcher, not only when the editor asks for it. Without the Hub nothing changes: the STL files are still unpacked and the emit is dropped. The legacy `/api/process` preview is not an export and emits nothing.
+
+`hoard_link/` is the shared family library, vendored unchanged; only its standard-library `family` module is loaded (through a private package name in `plato_family.py`), so Plato's requirements do not change.
 
 ## Verify
 

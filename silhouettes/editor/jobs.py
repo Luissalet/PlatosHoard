@@ -293,6 +293,16 @@ class JobScheduler:
         self._futures: Dict[str, Any] = {}  # job_id → pool AsyncResult
         self._pending_payloads: Dict[str, Dict[str, Any]] = {}
         self._active_job_id: Optional[str] = None
+        self._done_hooks: list = []
+
+    def add_done_hook(self, hook) -> None:
+        """Call ``hook(record)`` once when a job completes (never for failed or cancelled jobs). Hook errors are logged, not raised."""
+        self._done_hooks.append(hook)
+
+    @_locked
+    def poll(self) -> None:
+        """Notice finished jobs without anybody asking for them (a background watcher calls this)."""
+        self._poll_all()
 
     @property
     def output_dir(self) -> Optional[Path]:
@@ -426,6 +436,12 @@ class JobScheduler:
             self._futures.pop(job_id, None)
             if self._active_job_id == job_id:
                 self._active_job_id = None
+            if rec.state == JobState.COMPLETED:
+                for hook in list(self._done_hooks):
+                    try:
+                        hook(rec)
+                    except Exception:  # noqa: BLE001 - an observer never breaks the scheduler
+                        log.exception("job done hook failed for %s", job_id)
             self._dispatch_next()
 
     @_locked

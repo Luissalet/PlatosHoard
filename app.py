@@ -783,6 +783,9 @@ def api_process():
 
 if __name__ == "__main__":
     multiprocessing.freeze_support()
+    import plato_family
+
+    plato_family.start(_scheduler, _store, _DATA_DIR)  # family bus: plato.export.done when an STL export finishes
     # Reloader disabled: it would spawn a second process and duplicate the
     # job worker pool (spec §13.2).  Use debug=False in production.
     app.run(host="0.0.0.0", port=5000, debug=False, use_reloader=False)
