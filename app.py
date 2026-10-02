@@ -22,6 +22,7 @@ from flask import Flask, request, jsonify, render_template, render_template_stri
 # breaks the editor's ES modules. Register it before the first request.
 mimetypes.add_type("application/javascript", ".mjs")
 
+import plato_family
 from pipeline import process_image
 from silhouettes.editor.api import editor_bp, create_editor_app
 from silhouettes.editor.document_store import DocumentStore
@@ -31,6 +32,19 @@ app = Flask(__name__)
 app.config["TEMPLATES_AUTO_RELOAD"] = True
 app.jinja_env.auto_reload = True
 app.config["MAX_CONTENT_LENGTH"] = 16 * 1024 * 1024  # 16 MB upload limit
+
+
+PORT = int(os.environ.get("PLATO_PORT") or 5000)
+HOST = os.environ.get("PLATO_HOST") or "127.0.0.1"
+
+
+@app.before_request
+def _local_requests_only():
+    """The shared request guard: loopback Host (DNS rebinding), Origin and Fetch Metadata rules."""
+    refused = plato_family.check_request(request.method, dict(request.headers), PORT)
+    if refused:
+        return jsonify({"error": refused[1]}), refused[0]
+    return None
 
 
 @app.after_request
@@ -783,9 +797,7 @@ def api_process():
 
 if __name__ == "__main__":
     multiprocessing.freeze_support()
-    import plato_family
-
     plato_family.start(_scheduler, _store, _DATA_DIR)  # family bus: plato.export.done when an STL export finishes
     # Reloader disabled: it would spawn a second process and duplicate the
     # job worker pool (spec §13.2).  Use debug=False in production.
-    app.run(host="0.0.0.0", port=5000, debug=False, use_reloader=False)
+    app.run(host=HOST, port=PORT, debug=False, use_reloader=False)
