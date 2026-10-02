@@ -21,8 +21,8 @@ table or vice versa:
       "command_results": { "<command_id>": { "status": ..., "revision": ... }, ... }
     }
 
-Atomic write: write to ``<doc_id>.json.tmp.<pid>.<rand>``, ``flush`` +
-``os.fsync``, then ``os.replace`` onto the destination.  A crash at any
+Atomic write (Hoard Link's ``atomic.write_json_atomic``): write to a temp file next to the document, ``flush`` +
+``os.fsync``, then replace the destination (retried while Windows holds it).  A crash at any
 point leaves either the previous complete file or the new complete file,
 never a truncated one.  Orphan temp files from a crashed run are removed
 at store startup.
@@ -31,12 +31,12 @@ from __future__ import annotations
 
 import copy
 import json
-import os
 import re
 import threading
-import uuid
 from pathlib import Path
 from typing import Any, Mapping, Optional
+
+from plato_family import write_json_atomic
 
 from .commands import CommandError, dispatch
 from .models import DocumentError, new_document, validate_document
@@ -78,10 +78,11 @@ class DocumentStore:
     # ------------------------------------------------------------------
 
     def _clean_orphan_temp_files(self) -> None:
-        """Remove ``*.json.tmp.*`` leftovers from a crashed run."""
+        """Remove leftovers of a crashed run: ``*.json.tmp.*`` (the old temp names) and ``<id>.json.<pid>.<thread>.<rand>.tmp``
+        (the shared atomic writer's)."""
         for entry in self.documents_dir.iterdir():
             name = entry.name
-            if ".json.tmp." in name and entry.is_file():
+            if (".json.tmp." in name or (".json." in name and name.endswith(".tmp"))) and entry.is_file():
                 try:
                     entry.unlink()
                 except OSError:
@@ -119,15 +120,8 @@ class DocumentStore:
         return envelope
 
     def _write_envelope(self, doc_id: str, envelope: dict) -> None:
-        """Atomic write: temp file + fsync + os.replace."""
-        dest = self._path_for(doc_id)
-        tmp = dest.with_name(f"{doc_id}.json.tmp.{os.getpid()}.{uuid.uuid4().hex[:8]}")
-        data = json.dumps(envelope, ensure_ascii=False, indent=2)
-        with open(tmp, "w", encoding="utf-8") as fh:
-            fh.write(data)
-            fh.flush()
-            os.fsync(fh.fileno())
-        os.replace(tmp, dest)
+        """Atomic write (Hoard Link ``atomic``): temp file + fsync + replace, retried while Windows holds the file."""
+        write_json_atomic(self._path_for(doc_id), envelope)
 
     # ------------------------------------------------------------------
     # Public API

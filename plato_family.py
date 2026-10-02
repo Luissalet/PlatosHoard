@@ -17,7 +17,6 @@ import importlib
 import json
 import logging
 import os
-import secrets
 import sys
 import threading
 import time
@@ -33,10 +32,14 @@ _HERE = Path(__file__).resolve().parent
 log = logging.getLogger("plato.family")
 
 family: Any = None
+#: The standard-library-only modules of the vendored copy the app uses directly (None when the copy is missing).
+atomic: Any = None
+tokens: Any = None
+guard: Any = None
 
 
 def _load() -> None:
-    global family
+    global family, atomic, tokens, guard
     if family is not None:
         return
     folder = _HERE / "hoard_link"
@@ -50,6 +53,11 @@ def _load() -> None:
         family = importlib.import_module(_PKG + ".family")
     except Exception:  # noqa: BLE001 - a broken vendored copy must not stop the editor
         family = None
+    for name in ("atomic", "tokens", "guard"):
+        try:
+            globals()[name] = importlib.import_module(f"{_PKG}.{name}")
+        except Exception:  # noqa: BLE001
+            globals()[name] = None
 
 
 _load()
@@ -65,13 +73,8 @@ def configure(data_dir: Path | str) -> str:
         return ""
     token_file = Path(data_dir) / "mcp-token"
     try:
-        if not token_file.is_file() or not token_file.read_text(encoding="utf-8-sig").strip():
-            token_file.parent.mkdir(parents=True, exist_ok=True)
-            token_file.write_text(secrets.token_urlsafe(32), encoding="utf-8")
-            try:
-                token_file.chmod(0o600)
-            except OSError:
-                pass
+        if tokens is not None:
+            tokens.read_or_create_token(token_file)  # atomic, 0600, two starting processes agree on one token
     except OSError:
         pass
     family.configure(APP_ID, str(data_dir), token_file=str(token_file))
@@ -85,6 +88,23 @@ def emit(event_type: str, data: dict) -> bool:
         return bool(family.emit(event_type, data))
     except Exception:  # noqa: BLE001
         return False
+
+
+def write_json_atomic(path: Path | str, obj: Any) -> None:
+    """JSON to ``path`` through the shared atomic writer (temp file, fsync, replace with retries on Windows)."""
+    if atomic is None:
+        raise RuntimeError("the vendored hoard_link/atomic.py is missing")
+    atomic.write_json_atomic(path, obj)
+
+
+def check_request(method: str, headers: dict[str, str], port: int) -> Optional[tuple[int, str]]:
+    """The shared request guard for one request: ``None`` to let it through, else ``(status, message)``.
+    ``PLATO_ALLOWED_HOSTS`` (comma separated) opens a LAN name or a tailnet on purpose. The port is not enforced,
+    so a dev proxy forwarding another port keeps working. Without the vendored guard everything is refused."""
+    if guard is None:
+        return 403, "The request guard (hoard_link/guard.py) is missing."
+    allowed = guard.parse_allowed_hosts(os.environ.get("PLATO_ALLOWED_HOSTS"))
+    return guard.check_request(method, {k.lower(): v for k, v in headers.items()}, port, allowed)
 
 
 def export_ref(job_id: str) -> str:
