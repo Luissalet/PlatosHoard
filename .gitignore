@@ -4,6 +4,7 @@ __pycache__
 .odysseus
 .venv
 docs
+!hoard_link/docs/
 _ref
 .playwright-mcp
 .pytest_cache
