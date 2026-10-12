@@ -23,6 +23,7 @@ from flask import Flask, request, jsonify, render_template, render_template_stri
 mimetypes.add_type("application/javascript", ".mjs")
 
 import plato_family
+import plato_copilot
 from pipeline import process_image
 from silhouettes.editor.api import editor_bp, create_editor_app
 from silhouettes.editor.document_store import DocumentStore
@@ -65,6 +66,8 @@ _scheduler = JobScheduler(output_dir=_JOBS_DIR)
 app.extensions["editor_store"] = _store
 app.extensions["job_scheduler"] = _scheduler
 app.register_blueprint(editor_bp)
+# Faustus copilot: same-origin relay (/api/copilot/*) and the launcher added to every HTML page (HOARD_COPILOT=0 turns it off).
+plato_copilot.install_copilot(app, _DATA_DIR)
 
 
 HTML_TEMPLATE = """

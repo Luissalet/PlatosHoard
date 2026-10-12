@@ -26,6 +26,29 @@ Con `python app.py` en marcha, cuando termina un trabajo de exportación que inc
 
 `hoard_link/` es la biblioteca compartida de la familia, incluida sin cambios; solo se cargan sus módulos de biblioteca estándar (`family`, `atomic`, `tokens`, `guard`), con un nombre de paquete privado en `plato_family.py`, así que los requisitos de Plato no cambian. De ella toma la guardia de peticiones (cada petición se comprueba: `Host` local, `Origin` del mismo sitio y Fetch Metadata; `PLATO_ALLOWED_HOSTS` abre a propósito un nombre de red local o de tailnet), la escritura atómica de los documentos del editor (fichero temporal, fsync, reemplazo con reintentos en Windows) y el fichero de token. El servidor escucha ahora en `127.0.0.1` (`PLATO_HOST` y `PLATO_PORT` lo cambian; antes escuchaba en todas las interfaces).
 
+## Copiloto de Faustus
+
+Todas las páginas de la app (el editor de capas en `/editor` y la página heredada en `/legacy`) tienen un botón flotante **Faustus**. Abre un panel lateral con el chat de Faustus, para pedir cosas mientras miras la placa: el agente ve qué documento y qué capa tienes abiertos y los lee o cambia con la misma API REST del editor que expone el puente MCP REST. La conversación, el modelo, las herramientas y la memoria viven en Faustus; Plato no guarda ningún bucle de chat ni historial.
+
+Lo que el panel envía en cada turno (`window.hoardCopilot.context()` en [`static/editor/hoard-copilot.js`](static/editor/hoard-copilot.js), con las funciones auxiliares en [`copilot_context.mjs`](static/editor/copilot_context.mjs)):
+
+- `project`: el documento abierto (`external_project_id` = id del documento, `title` = su nombre). Una conversación por documento: al abrir otro documento se muestra la conversación de ese documento.
+- `active_objects`: el documento (`kind: "document"`: id, nombre, revisión, lienzo en mm, número de capas y el árbol de capas con id / título / padre) y, si hay una capa seleccionada, esa capa (`kind: "layer"`: id, título, padre, visible, bloqueada, asset, pose). El documento se lee del servidor en el momento del turno, así que un cambio anterior del agente ya está dentro. Sin documento (la página heredada, un documento que ya no existe) es `[]`.
+- `view.editor`: ancho, alto y márgenes del lienzo que has escrito y todavía no has aplicado (`{kind: "canvas", dirty: true, fields}`), solo cuando los hay.
+
+Al terminar un turno el editor recarga el documento si su revisión ha cambiado (lo cambió el agente), lo redibuja, quita la selección de una capa que ya no existe y conserva lo que estabas escribiendo en los campos del lienzo. El historial de deshacer empieza de nuevo en ese punto, porque sus instantáneas son anteriores al cambio del agente. El botón flotante queda abajo a la derecha del área del lienzo, a la izquierda del inspector, y nunca tapa sus campos.
+
+Rutas añadidas por [`plato_copilot.py`](plato_copilot.py), un relé pequeño en Flask con las mismas cuatro rutas que el copiloto de Hoard Link para servidores FastAPI y Node:
+
+| Ruta | Qué hace |
+|---|---|
+| `GET /api/copilot/info` | id y nombre de la app, un id de espacio de datos estable (`data/copilot-space-id`) y de dónde viene el panel |
+| `GET /api/copilot/panel.js` | el elemento `<faustus-chat>`, servido por Faustus a través del relé |
+| `POST /api/copilot/proxy` | cada petición del panel; los turnos de chat van como Server-Sent Events sin búfer; el token de Faustus se queda en el servidor, `origin.app_id` / `data_space_id` se fuerzan y solo se alcanzan las rutas de copiloto de Faustus (`/api/hoard-copilot/`, `/api/chat/`, `/api/session(s)`, `/api/chat_stream`) |
+| `GET /api/copilot/launcher.js` | el script del botón y el panel, añadido a cada página HTML que sirve la app (nunca a las respuestas de `/api/`) |
+
+Faustus se encuentra con `PLATOS_FAUSTUS_URL` o `HOARD_FAUSTUS_URL` (más `HOARD_FAUSTUS_TOKEN`), o con la configuración de Hoard Link, y si no, `127.0.0.1:7000` / `7001`. **Para desactivarlo** arranca la app con `HOARD_COPILOT=0`: sin rutas, sin botón y sin nada inyectado. `faustus-plugin.json` lo declara en `x-family.copilot`.
+
 ## Verificación
 
 ```sh
