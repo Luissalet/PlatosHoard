@@ -84,9 +84,9 @@ test('no document (or no id) gives empty objects and no project key', () => {
 test('canvas values typed but not applied travel in view.editor.fields', () => {
   const doc = fixture();
   const inputs = { ...inputsFor(doc), 'canvas-width-mm': '320', 'canvas-padding-left': '' };
-  assert.deepEqual(dirtyCanvasFields(doc, inputs), { 'canvas-width-mm': '320' });
+  assert.deepEqual(dirtyCanvasFields(doc, inputs), { 'canvas-width-mm': '320', 'canvas-padding-left': '' });
   const ctx = buildContext({ doc, inputs });
-  assert.deepEqual(ctx.view.editor, { kind: 'canvas', dirty: true, fields: { 'canvas-width-mm': '320' } });
+  assert.deepEqual(ctx.view.editor, { kind: 'canvas', dirty: true, fields: { 'canvas-width-mm': '320', 'canvas-padding-left': '' } });
 });
 
 test('a long layer tree is capped and says how much was left out', () => {
@@ -117,6 +117,7 @@ test('window.hoardCopilot exposes context() and onTurnEnd()', () => {
 test('context() reads the document the server holds now (an agent may have changed it)', async () => {
   const open = fixture();
   store.doc = open; store.revision = 4; store.selectedId = 'L1';
+  for (const [id, value] of Object.entries(inputsFor(open))) document.getElementById(id).value = value;
   const changed = fixture({ name: 'Escudo v2', revision: 5 });
   const calls = serve(changed);
   const ctx = await window.hoardCopilot.context({});
@@ -213,4 +214,57 @@ test('a page without the right panel keeps the default button position', () => {
   const page = new JSDOM('<body></body>').window;
   copilot.placeLauncher(page.document, page);
   assert.equal(page.document.documentElement.style.getPropertyValue('--hoard-copilot-right'), '');
+});
+
+test('a newer canvas revision retains typed fields in context', async () => {
+  const open = fixture();
+  store.doc = open; store.revision = 4;
+  for (const [id, value] of Object.entries(inputsFor(open))) document.getElementById(id).value = value;
+  document.getElementById('canvas-width-mm').value = '321';
+  document.getElementById('canvas-padding-left').value = '';
+  serve(fixture({ revision: 5, canvas: { ...open.canvas, width_mm: 222, height_mm: 444 } }));
+  const ctx = await window.hoardCopilot.context();
+  assert.equal(ctx.active_objects[0].canvas.width_mm, 222);
+  assert.deepEqual(ctx.view.editor.fields, { 'canvas-width-mm': '321', 'canvas-padding-left': '' });
+});
+
+test('refresh rebases untouched fields while retaining typing during the load', async () => {
+  const open = fixture();
+  store.doc = open; store.revision = 4;
+  for (const [id, value] of Object.entries(inputsFor(open))) document.getElementById(id).value = value;
+  document.getElementById('canvas-width-mm').value = '321';
+  const changed = fixture({ revision: 5, canvas: { ...open.canvas, width_mm: 222, height_mm: 444 } });
+  let loads = 0;
+  store.loadDocument = async () => {
+    loads += 1;
+    document.getElementById('canvas-width-mm').value = '654';
+    document.getElementById('canvas-padding-left').value = '';
+    await Promise.resolve();
+    store.doc = changed; store.revision = 5;
+  };
+  const redraw = () => {
+    for (const [id, value] of Object.entries(inputsFor(changed))) document.getElementById(id).value = value;
+  };
+  window.addEventListener('editor:refresh-request', redraw);
+  serve(changed);window.hoardCopilot.onTurnEnd();
+  await new Promise(resolve => setTimeout(resolve, 400));
+  window.removeEventListener('editor:refresh-request', redraw);
+  assert.equal(loads, 1);
+  assert.equal(document.getElementById('canvas-width-mm').value, '654');
+  assert.equal(document.getElementById('canvas-height-mm').value, '444');
+  assert.equal(document.getElementById('canvas-padding-left').value, '');
+});
+
+test('context keeps the initial form snapshot across a delayed document fetch', async () => {
+  const open = fixture();store.doc = open;store.revision = 4;store.selectedId = 'L1';
+  for (const [id, value] of Object.entries(inputsFor(open))) document.getElementById(id).value = value;
+  document.getElementById('canvas-width-mm').value = '321';
+  let release;
+  globalThis.fetch = () => new Promise(resolve => { release = resolve; });
+  const pending = window.hoardCopilot.context();
+  document.getElementById('canvas-width-mm').value = '654';store.selectedId = 'L2';
+  release({ ok: true, status: 200, json: async () => fixture({ revision: 5 }) });
+  const ctx = await pending;
+  assert.equal(ctx.view.editor.fields['canvas-width-mm'], '321');
+  assert.equal(ctx.active_objects[1].object_id, 'L1');
 });

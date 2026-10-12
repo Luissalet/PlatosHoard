@@ -82,9 +82,9 @@ export function dirtyCanvasFields(doc, inputs) {
   for (const [id, path] of Object.entries(CANVAS_INPUTS)) {
     if (!(id in inputs)) continue;
     const typed = inputs[id];
-    if (typed === '' || typed == null) continue;
+    if (typed == null) continue;
     const saved = Number(valueAt(doc.canvas, path) ?? 0);
-    if (!(Number(typed) === saved)) dirty[id] = typed;
+    if (typed === '' || !(Number(typed) === saved)) dirty[id] = typed;
   }
   return dirty;
 }

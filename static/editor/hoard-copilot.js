@@ -34,12 +34,14 @@ export async function context() {
   try {
     const open = store.doc;
     if (!open?.id) return buildContext({});
+    const selected = store.selectedId;
+    const typed = dirtyCanvasFields(open, readInputs());
     const doc = await freshDocument(open.id);
     if (!doc) return buildContext({});
-    const revision = doc.revision ?? 0;
-    const selectedId = store.selectedId && doc.layers?.[store.selectedId] ? store.selectedId : null;
-    const inputs = revision === (store.revision ?? revision) ? readInputs() : null;
-    return buildContext({ doc, selectedId, inputs });
+    const selectedId = selected && doc.layers?.[selected] ? selected : null;
+    const result = buildContext({ doc, selectedId });
+    if (Object.keys(typed).length) result.view.editor = { kind: 'canvas', dirty: true, fields: typed };
+    return result;
   } catch {
     return { active_objects: [], view: { page: 'editor' } };
   }
@@ -56,16 +58,15 @@ async function refreshAfterTurn() {
     const id = store.doc.id;
     const doc = await freshDocument(id);
     if (!doc || (doc.revision ?? 0) === store.revision) return;
-    const typed = dirtyCanvasFields(store.doc, readInputs());
-    const before = JSON.stringify(store.doc.canvas || {});
+    const before = store.doc;
     await store.loadDocument(id);
+    // Read after the load: typing can continue while the request is pending.
+    const typed = dirtyCanvasFields(before, readInputs());
     if (store.selectedId && !store.doc.layers?.[store.selectedId]) store.selectedId = null;
     window.dispatchEvent(new CustomEvent('editor:refresh-request'));
-    if (JSON.stringify(store.doc.canvas || {}) === before) {
-      for (const [field, value] of Object.entries(typed)) {
-        const node = document.getElementById(field);
-        if (node) node.value = value;
-      }
+    for (const [field, value] of Object.entries(typed)) {
+      const node = document.getElementById(field);
+      if (node) node.value = value;
     }
   } catch { /* the panel must never break the editor */ } finally {
     refreshing = false;

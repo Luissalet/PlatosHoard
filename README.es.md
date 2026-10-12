@@ -49,6 +49,8 @@ Rutas añadidas por [`plato_copilot.py`](plato_copilot.py), un blueprint pequeñ
 
 Faustus se encuentra con `PLATOS_FAUSTUS_URL` o `HOARD_FAUSTUS_URL` (más `HOARD_FAUSTUS_TOKEN`), o con la configuración de Hoard Link, y si no, `127.0.0.1:7000` / `7001`. **Para desactivarlo** arranca la app con `HOARD_COPILOT=0`: sin rutas, sin botón y sin nada inyectado. `faustus-plugin.json` lo declara en `x-family.copilot`.
 
+Los campos pendientes del lienzo siguen en el contexto aunque el servidor tenga una revisión nueva. El refresco conserva los campos modificados, también los vaciados y lo escrito mientras llega la respuesta; los campos sin modificar siguen la versión nueva del documento.
+
 ## Verificación
 
 ```sh
