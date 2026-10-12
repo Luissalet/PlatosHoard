@@ -57,9 +57,11 @@ async function refreshAfterTurn() {
   try {
     const id = store.doc.id;
     const doc = await freshDocument(id);
+    if (store.doc?.id !== id) return;
     if (!doc || (doc.revision ?? 0) === store.revision) return;
     const before = store.doc;
-    await store.loadDocument(id);
+    await store.loadDocument(id, { expectedCurrentId: id });
+    if (store.doc?.id !== id) return;
     // Read after the load: typing can continue while the request is pending.
     const typed = dirtyCanvasFields(before, readInputs());
     if (store.selectedId && !store.doc.layers?.[store.selectedId]) store.selectedId = null;

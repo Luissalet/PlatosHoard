@@ -15,7 +15,7 @@ globalThis.CustomEvent = dom.window.CustomEvent;
 globalThis.Event = dom.window.Event;
 
 const { buildContext, dirtyCanvasFields, documentObject, layerObject, layerTitle, MAX_LAYERS } = await import('../../static/editor/copilot_context.mjs');
-const { store } = await import('../../static/editor/store.js');
+const { EditorStore, store } = await import('../../static/editor/store.js');
 const copilot = await import('../../static/editor/hoard-copilot.js');
 
 function fixture(extra = {}) {
@@ -267,4 +267,42 @@ test('context keeps the initial form snapshot across a delayed document fetch', 
   const ctx = await pending;
   assert.equal(ctx.view.editor.fields['canvas-width-mm'], '321');
   assert.equal(ctx.active_objects[1].object_id, 'L1');
+});
+
+test('a turn refresh cannot reload an old document after a different document opens', async () => {
+  store.doc = fixture(); store.revision = 4;
+  let release;
+  globalThis.fetch = () => new Promise(resolve => { release = resolve; });
+  let loads = 0;store.loadDocument = async () => { loads += 1; };
+  window.hoardCopilot.onTurnEnd();
+  await new Promise(resolve => setTimeout(resolve, 200));
+  store.doc = fixture({ id: 'doc_other', revision: 7 });store.revision = 7;
+  document.getElementById('canvas-width-mm').value = '888';
+  release({ ok: true, status: 200, json: async () => fixture({ revision: 5 }) });
+  await new Promise(resolve => setTimeout(resolve, 50));
+  assert.equal(loads, 0);
+  assert.equal(store.doc.id, 'doc_other');
+  assert.equal(document.getElementById('canvas-width-mm').value, '888');
+});
+
+test('a conditional load preserves a different document and its undo history after the response', async () => {
+  const state = new EditorStore();state.doc = fixture();state.revision = 4;
+  let release;
+  globalThis.fetch = () => new Promise(resolve => { release = resolve; });
+  const pending = state.loadDocument('doc_abc123', { expectedCurrentId: 'doc_abc123' });
+  state.doc = fixture({ id: 'doc_other', revision: 7 });state.revision = 7;state.history = ['keep'];
+  release({ ok: true, json: async () => fixture({ revision: 5 }) });
+  await pending;
+  assert.equal(state.doc.id, 'doc_other');assert.equal(state.revision, 7);assert.deepEqual(state.history, ['keep']);
+});
+
+test('a conditional load also guards an asynchronously decoded payload', async () => {
+  const state = new EditorStore();state.doc = fixture();state.revision = 4;
+  let release;
+  globalThis.fetch = async () => ({ ok: true, json: () => new Promise(resolve => { release = resolve; }) });
+  const pending = state.loadDocument('doc_abc123', { expectedCurrentId: 'doc_abc123' });
+  await Promise.resolve();
+  state.doc = fixture({ id: 'doc_other', revision: 7 });state.revision = 7;state.history = ['keep'];
+  release(fixture({ revision: 5 }));await pending;
+  assert.equal(state.doc.id, 'doc_other');assert.equal(state.revision, 7);assert.deepEqual(state.history, ['keep']);
 });

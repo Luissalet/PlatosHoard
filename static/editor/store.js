@@ -42,10 +42,13 @@ export class EditorStore {
     return this.doc;
   }
 
-  async loadDocument(docId) {
+  async loadDocument(docId, { expectedCurrentId = null } = {}) {
     const res = await fetch(`${this.baseUrl}/documents/${encodeURIComponent(docId)}`);
+    if (expectedCurrentId !== null && this.doc?.id !== expectedCurrentId) return this.doc;
     if (!res.ok) throw await this._error(res);
-    this._applyDocumentPayload(await res.json());
+    const payload = await res.json();
+    if (expectedCurrentId !== null && this.doc?.id !== expectedCurrentId) return this.doc;
+    this._applyDocumentPayload(payload);
     this._resetHistory();
     return this.doc;
   }
