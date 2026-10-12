@@ -26,6 +26,29 @@ When `python app.py` runs and an export job finishes with STL in its formats, Pl
 
 `hoard_link/` is the shared family library, vendored unchanged; only its standard-library modules (`family`, `atomic`, `tokens`, `guard`) are loaded, through a private package name in `plato_family.py`, so Plato's requirements do not change. From it the app takes the request guard (every request is checked for a loopback `Host`, a same-site `Origin` and Fetch Metadata; `PLATO_ALLOWED_HOSTS` opens a LAN or tailnet name on purpose), the atomic write of editor documents (temp file, fsync, replace with retries on Windows) and the token file. The server now listens on `127.0.0.1` (`PLATO_HOST` and `PLATO_PORT` change it; before, it listened on all interfaces).
 
+## Faustus copilot
+
+Every page of the app (the layer editor at `/editor`, the legacy page at `/legacy`) has a floating **Faustus** button. It opens a side panel with the Faustus chat, so you can ask for things while you look at the plate: the agent sees which document and layer you have open and reads or changes them with the same REST editor API the REST MCP bridge exposes. Conversation, model, tools and memory live in Faustus; Plato keeps no chat loop and no history.
+
+What the panel sends with every turn (`window.hoardCopilot.context()` in [`static/editor/hoard-copilot.js`](static/editor/hoard-copilot.js), helpers in [`copilot_context.mjs`](static/editor/copilot_context.mjs)):
+
+- `project`: the open document (`external_project_id` = document id, `title` = its name). One conversation per document: opening another document shows that document's conversation.
+- `active_objects`: the document (`kind: "document"`: id, name, revision, canvas in mm, layer count, the layer tree as id / title / parent) and, when a layer is selected, that layer (`kind: "layer"`: id, title, parent, visible, locked, asset, pose). The document is read from the server at the moment of the turn, so an agent's earlier change is already in it. With no document (the legacy page, a document that no longer exists) it is `[]`.
+- `view.editor`: canvas width, height and margins you typed but have not applied (`{kind: "canvas", dirty: true, fields}`), only when there are any.
+
+When a turn ends the editor reloads the document if its revision moved (the agent changed it), redraws, drops the selection of a layer that is gone and keeps what you were typing in the canvas fields. Changed fields, including cleared inputs and typing during the load, remain pending even when the agent changes the same canvas; untouched fields follow the new document. Pending fields stay in the context across revisions. The undo history restarts at that point, because its snapshots predate the agent's change. The floating button sits at the bottom right of the canvas area, left of the inspector, so it never covers its fields.
+
+Routes added by [`plato_copilot.py`](plato_copilot.py), a small Flask blueprint over the vendored Hoard Link copilot pieces (`CopilotRelay`, `multipart_context`, `inject_launcher`, `LAUNCHER_JS`), with the same four routes as the Hoard Link copilot for FastAPI and Node hosts:
+
+| Route | What it does |
+|---|---|
+| `GET /api/copilot/info` | app id and name, a stable data space id (`data/copilot-space-id`), where the panel comes from |
+| `GET /api/copilot/panel.js` | the `<faustus-chat>` element, served by Faustus through the relay |
+| `POST /api/copilot/proxy` | every panel request, chat turns as Server-Sent Events streamed without buffering; the Faustus token stays on the server, `origin.app_id` / `data_space_id` are forced, and only Faustus's copilot paths (`/api/hoard-copilot/`, `/api/chat/`, `/api/session(s)`, `/api/chat_stream`) are reachable |
+| `GET /api/copilot/launcher.js` | the button and panel script, added to every HTML page the app serves (never to `/api/` answers) |
+
+Faustus is found through `PLATOS_FAUSTUS_URL` or `HOARD_FAUSTUS_URL` (plus `HOARD_FAUSTUS_TOKEN`), or the Hoard Link config, falling back to `127.0.0.1:7000` / `7001`. **To turn it off** start the app with `HOARD_COPILOT=0`: no routes, no button, nothing injected. `faustus-plugin.json` declares it under `x-family.copilot`.
+
 ## Verify
 
 ```sh

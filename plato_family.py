@@ -62,6 +62,17 @@ def _load() -> None:
 
 _load()
 
+
+def vendored(name: str) -> Any:
+    """Another standard-library-only module of the vendored copy (``copilot``, ``config``...), or ``None`` when the copy
+    is missing or that module does not load. The private package keeps the ``__init__`` from running."""
+    if _PKG not in sys.modules:
+        return None
+    try:
+        return importlib.import_module(f"{_PKG}.{name}")
+    except Exception:  # noqa: BLE001 - an older or broken copy must not stop the editor
+        return None
+
 #: Seconds between two events of one export. The hub's rule that imports exports into the model library
 #: ignores a repeat within its cooldown (5 s), so a bundle with several STL files is announced one by one.
 EVENT_SPACING_S = float(os.environ.get("PLATO_EVENT_SPACING_S", "5.5"))

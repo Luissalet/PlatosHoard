@@ -18,6 +18,7 @@ import { arrangementOrder, mountImportedNameChain } from './arrangement.mjs';
 import { constrainDescendants, fitNestedPose } from './hierarchy_fit.mjs';
 import { ProjectFiles, droppedProject } from './project_file.mjs';
 import { createPlatoPreview } from './plato_preview.mjs';
+import './hoard-copilot.js';  // window.hoardCopilot: the Faustus copilot's view of the open document
 
 const projectFiles = new ProjectFiles();
 
@@ -753,6 +754,9 @@ function refreshAll() {
   try { if (store.doc?.id) localStorage.setItem('editor.lastDocument', store.doc.id); } catch { /* optional */ }
   window.dispatchEvent(new CustomEvent('editor:doc-changed'));
 }
+
+// The Faustus copilot asks for a redraw after a turn changed the document on the server (hoard-copilot.js reloaded it).
+window.addEventListener('editor:refresh-request', () => { try { refreshAll(); } catch (err) { console.error('copilot refresh', err); } });
 
 function updateViewers() {
   viewer3d?.update();
