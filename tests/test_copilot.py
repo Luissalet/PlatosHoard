@@ -235,7 +235,7 @@ def test_the_app_serves_the_copilot_on_its_editor(tmp_path, faustus):
     from app import app as plato
 
     relay = plato.blueprints["faustus_copilot"].relay
-    relay.urls, relay.selected = [faustus.url], None
+    relay.urls, relay._selected = (faustus.url,), None
     client = plato.test_client()
     page = client.get("/editor")
     assert page.status_code == 200 and page.get_data().count(b"/api/copilot/launcher.js") == 1
@@ -244,9 +244,27 @@ def test_the_app_serves_the_copilot_on_its_editor(tmp_path, faustus):
     assert b"launcher.js" not in client.get("/static/editor/editor.js").get_data()
 
 
-def test_launcher_copy_that_ships_with_the_app_is_the_launcher():
-    shipped = (ROOT / "static" / "copilot" / "launcher.js").read_text(encoding="utf-8")
-    assert "window.__hoardCopilotLauncher" in shipped and "hoardCopilot" in shipped and "/api/copilot/proxy" in shipped
+def test_the_launcher_is_the_vendored_one_and_the_relay_is_the_vendored_relay(relay_app):
+    from _plato_hoard_link.copilot_launcher import LAUNCHER_JS
+    from _plato_hoard_link.copilot_stdlib import CopilotRelay
+
+    assert relay_app.test_client().get("/api/copilot/launcher.js").get_data(as_text=True) == LAUNCHER_JS
+    assert isinstance(relay_app.blueprints["faustus_copilot"].relay, CopilotRelay)
+    assert not (ROOT / "static" / "copilot").exists()   # no private copy of the launcher
+
+
+def test_faustus_url_and_token_come_from_the_environment(tmp_path, monkeypatch):
+    monkeypatch.setenv("PLATOS_FAUSTUS_URL", "http://127.0.0.1:9/")
+    monkeypatch.setenv("HOARD_FAUSTUS_TOKEN", "abc")
+    relay = plato_copilot.make_blueprint(tmp_path).relay
+    assert relay.urls == ("http://127.0.0.1:9",) and relay.token == "abc"
+
+
+def test_the_copilot_is_left_out_when_the_vendored_copy_has_no_copilot_modules(tmp_path, monkeypatch):
+    monkeypatch.setattr(plato_copilot, "_stdlib", None)
+    app = Flask(__name__)
+    assert plato_copilot.install_copilot(app, tmp_path) is False
+    assert app.test_client().get("/api/copilot/info").status_code == 404
 
 
 def test_manifest_declares_the_copilot():

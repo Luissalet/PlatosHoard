@@ -38,7 +38,7 @@ Lo que el panel envía en cada turno (`window.hoardCopilot.context()` en [`stati
 
 Al terminar un turno el editor recarga el documento si su revisión ha cambiado (lo cambió el agente), lo redibuja, quita la selección de una capa que ya no existe y conserva lo que estabas escribiendo en los campos del lienzo. El historial de deshacer empieza de nuevo en ese punto, porque sus instantáneas son anteriores al cambio del agente. El botón flotante queda abajo a la derecha del área del lienzo, a la izquierda del inspector, y nunca tapa sus campos.
 
-Rutas añadidas por [`plato_copilot.py`](plato_copilot.py), un relé pequeño en Flask con las mismas cuatro rutas que el copiloto de Hoard Link para servidores FastAPI y Node:
+Rutas añadidas por [`plato_copilot.py`](plato_copilot.py), un blueprint pequeño de Flask sobre las piezas del copiloto de Hoard Link copiadas en el proyecto (`CopilotRelay`, `multipart_context`, `inject_launcher`, `LAUNCHER_JS`), con las mismas cuatro rutas que el copiloto de Hoard Link para servidores FastAPI y Node:
 
 | Ruta | Qué hace |
 |---|---|

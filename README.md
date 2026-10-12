@@ -38,7 +38,7 @@ What the panel sends with every turn (`window.hoardCopilot.context()` in [`stati
 
 When a turn ends the editor reloads the document if its revision moved (the agent changed it), redraws, drops the selection of a layer that is gone and keeps what you were typing in the canvas fields. The undo history restarts at that point, because its snapshots predate the agent's change. The floating button sits at the bottom right of the canvas area, left of the inspector, so it never covers its fields.
 
-Routes added by [`plato_copilot.py`](plato_copilot.py), a small Flask relay with the same four routes as the Hoard Link copilot for FastAPI and Node hosts:
+Routes added by [`plato_copilot.py`](plato_copilot.py), a small Flask blueprint over the vendored Hoard Link copilot pieces (`CopilotRelay`, `multipart_context`, `inject_launcher`, `LAUNCHER_JS`), with the same four routes as the Hoard Link copilot for FastAPI and Node hosts:
 
 | Route | What it does |
 |---|---|
