@@ -53,7 +53,12 @@ def available() -> bool:
 
 
 def _path_allowed(path: Any) -> bool:
-    """Only the copilot surface of Faustus is reachable through the relay."""
+    """Only the copilot surface of Faustus is reachable through the relay.
+
+    The vendored Hoard Link list is the single source (file uploads, dot-segment
+    refusal); the inline list only serves an install without that module."""
+    if _copilot is not None and hasattr(_copilot, "allowed_route"):
+        return bool(_copilot.allowed_route(path))
     if not isinstance(path, str) or not path.startswith("/") or path.startswith("//"):
         return False
     route = urlsplit(path).path

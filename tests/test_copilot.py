@@ -272,3 +272,12 @@ def test_manifest_declares_the_copilot():
     copilot = manifest["x-family"]["copilot"]
     assert copilot["provider"] == "faustus" and copilot["contract"] == "1.0" and copilot["panel"] == "/api/copilot/panel.js"
     assert "active_objects" in copilot["context"]
+
+
+def test_route_list_is_the_shared_one():
+    """Uploads reach Faustus and dot segments are refused, exactly as in every other Hoard's relay."""
+    assert plato_copilot._path_allowed("/api/upload")
+    assert plato_copilot._path_allowed("/api/chat_stream")
+    assert not plato_copilot._path_allowed("/api/chat/../settings")
+    assert not plato_copilot._path_allowed("/api/chat/%2e%2e/settings")
+    assert not plato_copilot._path_allowed("/api/settings")
